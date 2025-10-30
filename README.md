@@ -135,7 +135,7 @@ cd case-organizer-v3
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python app.py
+python3 app.py
 ```
 
 Access the app at:
@@ -150,7 +150,7 @@ http://localhost:5000
 
 ```bash
 # Download the latest release
-wget https://github.com/<your-org>/case-organizer-v3/releases/download/v3.1.2/case-organizer_3.1.2_amd64.deb
+wget https://github.com/LORDINFINITY12/case-organizer-v3/releases/download/v3.1.2/case-organizer_3.1.2_amd64.deb
 
 # Install the package
 sudo dpkg -i case-organizer_3.1.2_amd64.deb
