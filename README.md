@@ -32,11 +32,14 @@ It introduces secure email-based authentication, internal messaging, integrated 
   - Promote or demote roles between *admin* and *standard*.  
   - Edit or delete user accounts.  
   - Update or relocate the root storage path live.  
-  - Delete server files directly from the dashboard.  
+  - Delete server files directly from the dashboard.
+
+![Admin Account Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Admin-Account-Demo.png)
 
 ### Case Management
 - Create, edit, and organize structured case directories:
-  ```none
+
+   ```none
   fs-files/
     YYYY/
       MMM/
@@ -70,10 +73,14 @@ It introduces secure email-based authentication, internal messaging, integrated 
 - Dual save: global `Invoices/` archive and per-case folder.  
 - Context-aware UI disables irrelevant controls until a case is selected.
 
+![Invoice Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Invoice-Demo.png)
+
 ### Internal Messaging
 - Built-in mailbox for users to send, receive, and read messages.  
 - Asynchronous SMTP notifications prevent UI blocking.  
 - Optional performance logging for slower servers.
+
+![Messaging Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Messagin-Demo.png)
 
 ### Search and Retrieval
 - Multi-filter search:
@@ -83,12 +90,20 @@ It introduces secure email-based authentication, internal messaging, integrated 
   - Free-text queries  
 - Fast indexed search across Notes, Case Law, and Invoices.
 
+![Case Law Search Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Case-Law-Search-Demo.png)
+
 ### UI and UX
-- Flattened, consistent styling across all pages.  
-- Password-visibility toggle on login form.  
+- Flattened, consistent styling across all pages.
+
+![Index Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Index-Demo.png)
+
+- Password-visibility toggle on login form.
+
+![Login Screen Visibility Toggle](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Login-Screen-Visibility-Toggle.png)
+  
 - Dark/light theme compatibility.
   
-  ![Dark/Light Mode Comparison](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Dark-Light-Comparison.png)
+![Dark/Light Mode Comparison](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Dark-Light-Comparison.png)
 
 - Clear disabled states and keyboard-focus polish.
 
