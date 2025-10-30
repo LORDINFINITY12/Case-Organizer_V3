@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark">
+  <script>
+      (function () {
+          try {
+              const KEY = 'caseOrg.theme';
+              const saved = localStorage.getItem(KEY);
+              const wantsDark = saved ? (saved === 'dark')
+                  : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+              const defaultDark = true;
+              const useDark = saved ? (saved === 'dark') : defaultDark || wantsDark;
+              if (useDark) document.documentElement.setAttribute('data-theme', 'dark');
+          } catch (e) {}
+      })();
+  </script>
+  <title>Case Organizer – Settings</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/Case_Organizer_logo.png') }}" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a href="{{ url_for('home') }}" class="brand">Case Organizer</a>
+      <div class="spacer"></div>
+      {% if current_user %}
+        <a href="{{ url_for('messages_home') }}" class="messages-link" title="Messages">
+          <i class="fa-solid fa-envelope"></i>
+          {% if unread_count %}
+            <span class="badge">{{ unread_count }}</span>
+          {% endif %}
+        </a>
+        <a href="{{ url_for('account') }}" class="account-link" title="My Account">
+          <i class="fa-solid fa-user"></i>
+        </a>
+        <a href="{{ url_for('invoice_form') }}" class="invoice-link" title="Generate Invoice">
+          <i class="fa-solid fa-file-invoice-dollar"></i>
+        </a>
+        <a href="{{ url_for('admin_settings') }}" class="settings-link" title="Settings">
+          <i class="fa-solid fa-gear"></i>
+        </a>
+      {% endif %}
+      <div class="user">{{ current_user.email if current_user else 'Guest' }}</div>
+      <button id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <i class="fa-solid fa-moon"></i>
+      </button>
+      <a href="{{ url_for('logout') }}" class="logout" title="Logout">
+        <i class="fa-solid fa-right-from-bracket"></i>
+      </a>
+    </header>
+
+    <main class="home enter-animate">
+      {% include "_flash.html" %}
+
+      <h1>Administrator Settings</h1>
+      <div class="settings-grid">
+        <div class="settings-card">
+          <h2>Storage</h2>
+          <form method="post">
+            <input type="hidden" name="form_name" value="fs_root">
+            <label for="fs_root">Case files root directory</label>
+            <input id="fs_root" name="fs_root" type="text" value="{{ fs_root }}" placeholder="/mnt/data/case-files" required>
+            <p class="form-help">The folder will be created if it does not exist. Moving existing files is your responsibility.</p>
+            <button type="submit" class="btn-primary">Update Storage</button>
+          </form>
+        </div>
+
+        <div class="settings-card">
+          <h2>SMTP (Email)</h2>
+          <form method="post">
+            <input type="hidden" name="form_name" value="smtp">
+            <label for="smtp_host">Host</label>
+            <input id="smtp_host" name="smtp_host" type="text" value="{{ smtp.host }}" required>
+
+            <label for="smtp_port">Port</label>
+            <input id="smtp_port" name="smtp_port" type="number" value="{{ smtp.port }}" required>
+
+            <label for="smtp_username">Username</label>
+            <input id="smtp_username" name="smtp_username" type="text" value="{{ smtp.username }}">
+
+            <label for="smtp_password">Password</label>
+            <input id="smtp_password" name="smtp_password" type="password" placeholder="{% if smtp_password_configured %}Leave blank to keep current{% else %}Password{% endif %}">
+
+            <label class="checkbox-inline">
+              <input type="checkbox" name="smtp_use_tls" value="1" {% if smtp.use_tls %}checked{% endif %}>
+              Use TLS/STARTTLS
+            </label>
+
+            <label for="smtp_from_email">From-address</label>
+            <input id="smtp_from_email" name="smtp_from_email" type="email" value="{{ smtp.from_email }}" required>
+
+            <button type="submit" class="btn-primary">Save SMTP Settings</button>
+          </form>
+        </div>
+
+        <div class="settings-card">
+          <h2>Create User</h2>
+          <form method="post">
+            <input type="hidden" name="form_name" value="create_user">
+            <label for="user_email">Email</label>
+            <input id="user_email" name="user_email" type="email" placeholder="user@example.com" required>
+
+            <label for="user_role">Role</label>
+            <select id="user_role" name="user_role">
+              <option value="user">User</option>
+              <option value="admin">Administrator</option>
+            </select>
+
+            <label for="user_password">Temporary password</label>
+            <input id="user_password" name="user_password" type="password" placeholder="Minimum 8 characters" required>
+
+            <button type="submit" class="btn-secondary">Add User</button>
+          </form>
+        </div>
+      </div>
+
+      <section class="settings-card" style="margin-top:16px;">
+        <h2>Existing Users</h2>
+        <div class="table-wrapper">
+          <table class="settings-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Last Login</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for user in users %}
+                <tr class="{% if not user.is_active %}inactive{% endif %}">
+                  <td>{{ user.email }}</td>
+                  <td>{{ user.role|capitalize }}</td>
+                  <td>{{ 'Active' if user.is_active else 'Inactive' }}</td>
+                  <td>{{ user.created_at or '—' }}</td>
+                  <td>{{ user.last_login_at or 'Never' }}</td>
+                  <td>
+                    <form method="post" class="settings-inline-form">
+                      <input type="hidden" name="form_name" value="update_user">
+                      <input type="hidden" name="user_id" value="{{ user.id }}">
+                      <input type="email" name="new_email" value="{{ user.email }}" required>
+                      <select name="new_role">
+                        <option value="user" {% if user.role == 'user' %}selected{% endif %}>User</option>
+                        <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Administrator</option>
+                      </select>
+                      <button type="submit" class="btn-secondary">Update</button>
+                    </form>
+
+                    <form method="post" class="settings-inline-form">
+                      <input type="hidden" name="form_name" value="reset_password_user">
+                      <input type="hidden" name="user_id" value="{{ user.id }}">
+                      <button type="submit" class="btn-ghost">Send reset link</button>
+                    </form>
+
+                    {% set disable_toggle = False %}
+                    {% if user.id == current_user.id and user.is_active %}
+                      {% set disable_toggle = True %}
+                    {% endif %}
+                    {% if user.role == 'admin' and user.is_active and last_active_admin_id == user.id %}
+                      {% set disable_toggle = True %}
+                    {% endif %}
+                    <form method="post" style="display:inline-block;">
+                      <input type="hidden" name="form_name" value="toggle_user">
+                      <input type="hidden" name="user_id" value="{{ user.id }}">
+                      <input type="hidden" name="new_state" value="{{ 0 if user.is_active else 1 }}">
+                      <button type="submit"
+                              class="{% if user.is_active %}btn-danger{% else %}btn-secondary{% endif %}"
+                              {% if disable_toggle %}disabled{% endif %}>
+                        {{ 'Deactivate' if user.is_active else 'Activate' }}
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.CaseOrg = Object.assign(window.CaseOrg || {}, {
+      isAdmin: {{ 'true' if current_user and current_user.role == 'admin' else 'false' }}
+    });
+  </script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

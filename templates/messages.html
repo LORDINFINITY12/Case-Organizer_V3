@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark">
+  <script>
+      (function () {
+          try {
+              const KEY = 'caseOrg.theme';
+              const saved = localStorage.getItem(KEY);
+              const wantsDark = saved ? (saved === 'dark')
+                  : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+              const defaultDark = true;
+              const useDark = saved ? (saved === 'dark') : defaultDark || wantsDark;
+              if (useDark) document.documentElement.setAttribute('data-theme', 'dark');
+          } catch (e) {}
+      })();
+  </script>
+  <title>Case Organizer – Messages</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/Case_Organizer_logo.png') }}" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a href="{{ url_for('home') }}" class="brand">Case Organizer</a>
+      <div class="spacer"></div>
+      {% if current_user %}
+        <a href="{{ url_for('messages_home') }}" class="messages-link" title="Messages" aria-current="page">
+          <i class="fa-solid fa-envelope"></i>
+          {% if unread_count %}
+            <span class="badge">{{ unread_count }}</span>
+          {% endif %}
+        </a>
+        <a href="{{ url_for('account') }}" class="account-link" title="My Account">
+          <i class="fa-solid fa-user"></i>
+        </a>
+        <a href="{{ url_for('invoice_form') }}" class="invoice-link" title="Generate Invoice">
+          <i class="fa-solid fa-file-invoice-dollar"></i>
+        </a>
+        {% if current_user.role == 'admin' %}
+          <a href="{{ url_for('admin_settings') }}" class="settings-link" title="Settings">
+            <i class="fa-solid fa-gear"></i>
+          </a>
+        {% endif %}
+      {% endif %}
+      <div class="user">{{ current_user.email if current_user else 'Guest' }}</div>
+      <button id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <i class="fa-solid fa-moon"></i>
+      </button>
+      <a href="{{ url_for('logout') }}" class="logout" title="Logout">
+        <i class="fa-solid fa-right-from-bracket"></i>
+      </a>
+    </header>
+
+    <main class="home enter-animate">
+      {% include "_flash.html" %}
+
+      <h1>Messages</h1>
+
+      <div class="messages-layout">
+        <section class="messages-card compose-card">
+          <h2>Compose Message</h2>
+          {% if recipients %}
+          <form method="post">
+            <input type="hidden" name="form_name" value="send_message">
+
+            <label for="recipient_id">Send to</label>
+            <select id="recipient_id" name="recipient_id" required>
+              <option value="">Select a recipient</option>
+              {% for user in recipients %}
+                {% set user_id_str = '' ~ user.id %}
+                <option value="{{ user.id }}" {% if draft.recipient_id and draft.recipient_id == user_id_str %}selected{% endif %}>{{ user.email }}{% if user.role == 'admin' %} (admin){% endif %}</option>
+              {% endfor %}
+            </select>
+
+            <label for="subject">Subject <span class="optional">(optional)</span></label>
+            <input id="subject" name="subject" type="text" maxlength="180" placeholder="Subject" value="{{ draft.subject }}">
+
+            <label for="body">Message</label>
+            <textarea id="body" name="body" rows="6" placeholder="Write your message..." required>{{ draft.body }}</textarea>
+
+            <div class="form-actions">
+              <button type="submit" class="btn-primary">Send Message</button>
+            </div>
+          </form>
+          {% else %}
+            <p class="empty-state">You are the only active user right now. Invite another user to start messaging.</p>
+          {% endif %}
+        </section>
+
+        <section class="messages-columns">
+          <div id="inbox-section" class="messages-card">
+            <div class="messages-card-head">
+              <h2>Inbox</h2>
+              <span class="count">{{ inbox|length }} message{% if inbox|length != 1 %}s{% endif %}</span>
+            </div>
+            {% if inbox %}
+              <ul class="message-list">
+                {% for message in inbox %}
+                  {% set body_text = message.body or '' %}
+                  {% set preview = body_text[:140] %}
+                  <li class="message-row{% if message.is_read == 0 %} unread{% endif %}">
+                    <div class="message-head">
+                      <span class="message-subject">{{ message.subject or 'No subject' }}</span>
+                      <span class="message-date">{{ (message.created_at or '') }}</span>
+                    </div>
+                    <div class="message-meta">
+                      <span>From {{ message.sender_email }}</span>
+                      <span>To {{ current_user.email }}</span>
+                    </div>
+                    {% if preview %}
+                      <div class="message-preview">{{ preview }}{% if body_text|length > 140 %}…{% endif %}</div>
+                    {% endif %}
+                    <div class="message-actions">
+                      <a href="{{ url_for('message_detail', message_id=message.id) }}" class="btn-secondary">Open</a>
+                      {% if message.is_read == 0 %}
+                        <span class="badge-new">New</span>
+                      {% endif %}
+                      <form method="post" action="{{ url_for('delete_message_action', message_id=message.id) }}" class="message-delete-form">
+                        <input type="hidden" name="current_tab" value="inbox">
+                        <button type="submit" class="icon-btn icon-danger" title="Delete message" aria-label="Delete message"
+                          onclick="return confirm('Delete this message? This cannot be undone.');">
+                          <i class="fa-solid fa-trash"></i>
+                        </button>
+                      </form>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="empty-state">No messages in your inbox yet.</p>
+            {% endif %}
+          </div>
+
+          <div id="sent-section" class="messages-card">
+            <div class="messages-card-head">
+              <h2>Sent</h2>
+              <span class="count">{{ sent|length }} message{% if sent|length != 1 %}s{% endif %}</span>
+            </div>
+            {% if sent %}
+              <ul class="message-list">
+                {% for message in sent %}
+                  {% set body_text = message.body or '' %}
+                  {% set preview = body_text[:140] %}
+                  <li class="message-row">
+                    <div class="message-head">
+                      <span class="message-subject">{{ message.subject or 'No subject' }}</span>
+                      <span class="message-date">{{ (message.created_at or '') }}</span>
+                    </div>
+                    <div class="message-meta">
+                      <span>To {{ message.recipient_email }}</span>
+                    </div>
+                    {% if preview %}
+                      <div class="message-preview">{{ preview }}{% if body_text|length > 140 %}…{% endif %}</div>
+                    {% endif %}
+                    <div class="message-actions">
+                      <a href="{{ url_for('message_detail', message_id=message.id) }}" class="btn-secondary">Open</a>
+                      <form method="post" action="{{ url_for('delete_message_action', message_id=message.id) }}" class="message-delete-form">
+                        <input type="hidden" name="current_tab" value="sent">
+                        <button type="submit" class="icon-btn icon-danger" title="Delete message" aria-label="Delete message"
+                          onclick="return confirm('Delete this message? This cannot be undone.');">
+                          <i class="fa-solid fa-trash"></i>
+                        </button>
+                      </form>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="empty-state">You have not sent any messages yet.</p>
+            {% endif %}
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    window.CaseOrg = Object.assign(window.CaseOrg || {}, {
+      isAdmin: {{ 'true' if current_user and current_user.role == 'admin' else 'false' }}
+    });
+  </script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% if tab == 'sent' %}
+  <script>
+    window.addEventListener('DOMContentLoaded', function () {
+      const target = document.getElementById('sent-section');
+      if (target && typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  </script>
+  {% endif %}
+</body>
+</html>

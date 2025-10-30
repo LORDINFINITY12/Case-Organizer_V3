@@ -1,0 +1,37 @@
+case-organizer (3.1.1) unstable; urgency=medium
+
+  * Security Patch: User Auto-Logout after 10 mins of non-usage.
+
+ -- Izumi <swarajswarupaggarwal@gmail.com>  Tue, 15 Oct 2025 13:15:00 +0530
+
+case-organizer (3.1.0) unstable; urgency=medium
+
+  * Wired internal messaging to send notification emails asynchronously,
+    caching SMTP credentials and adding optional timing logs so slow servers
+    no longer block the UI while still surfacing failures.
+  * Added a password visibility toggle on the login form to trim user entry
+    mistakes without weakening validation.
+  * Queued password-reset emails for both users and admins, sharing the new
+    email pipeline improvements.
+
+ -- Izumi <swarajswarupaggarwal@gmail.com>  Tue, 14 Oct 2025 10:45:00 +0530
+
+case-organizer (3.0.0) unstable; urgency=medium
+
+  * Finalized Manage Case workflow: File Category dropdown now highlights
+    "Invoices", subcategory disables with clear "(not used for Invoices)"
+    messaging, and the Generate Invoice button remains greyed out until a
+    case is selected.
+  * Introduced the full invoice generator, available both as a standalone
+    workflow and directly from case management so firms can raise documents
+    in context or independently as needed.
+  * Streamlined note handling: the modal only exposes Save/Cancel while you
+    are editing, the Manage Case note button appears solely when a Note.json
+    exists for the chosen case, and it stays hidden otherwise.
+  * Invoice generation now writes PDFs both to the global Invoices archive
+    and into the selected case’s own Invoices folder; caret positioning in
+    amount fields no longer jumps unexpectedly while typing.
+  * UI polish: added explicit disabled styling for secondary buttons and
+    tightened keyboard-focus behaviour to keep actions visually consistent.
+
+ -- Izumi <swarajswarupaggarwal@gmail.com>  Mon, 13 Oct 2025 18:25:00 +0530

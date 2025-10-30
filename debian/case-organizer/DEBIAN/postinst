@@ -1,0 +1,45 @@
+#!/bin/sh
+set -e
+
+USER=caseorg
+GROUP=caseorg
+STATE_DIR=/var/lib/case-organizer
+LOG_DIR=/var/log/case-organizer
+ETC_DIR=/etc/case-organizer
+ENV_FILE=$ETC_DIR/case-organizer.env
+
+# 1) Create directories
+mkdir -p "$STATE_DIR" "$LOG_DIR" "$ETC_DIR"
+
+# 2) Ensure system user/group exists (idempotent)
+if ! getent group "$GROUP" >/dev/null; then
+    addgroup --system "$GROUP"
+fi
+if ! id "$USER" >/dev/null 2>&1; then
+    adduser --system --ingroup "$GROUP" --home "$STATE_DIR" --no-create-home "$USER"
+fi
+
+# 3) Ownership
+chown -R "$USER:$GROUP" "$STATE_DIR" "$LOG_DIR"
+
+# 4) Drop a default env file if missing
+if [ ! -f "$ENV_FILE" ]; then
+cat >"$ENV_FILE" <<'EOF'
+# Case Organizer environment
+CASEORG_STATE_DIR=/var/lib/case-organizer
+# Change this to your mounted storage:
+CASEORG_FS_ROOT=/mount/nvme2/fs-files
+CASEORG_HOST=0.0.0.0
+CASEORG_PORT=5000
+EOF
+fi
+
+# 5) Systemd reload/enable
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+    systemctl enable case-organizer.service || true
+fi
+
+exit 0
+
+

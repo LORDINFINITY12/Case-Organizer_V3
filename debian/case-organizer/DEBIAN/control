@@ -1,0 +1,13 @@
+Package: case-organizer
+Version: 1.1.1
+Architecture: all
+Maintainer: Izumi <izumi@example.com>
+Installed-Size: 106
+Depends: python3, python3-flask, adduser
+Section: web
+Priority: optional
+Homepage: https://github.com/your/repo
+Description: Lightweight Flask-based case file organizer with systemd service
+ Case Organizer organizes legal case files into a structured hierarchy,
+ supports uploads, search, and metadata. Ships with a systemd unit and
+ an initial setup flow.

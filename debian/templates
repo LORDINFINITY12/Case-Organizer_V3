@@ -1,0 +1,36 @@
+Template: case-organizer/smtp-host
+Type: string
+Default: smtp.example.com
+Description: SMTP relay host for outgoing email
+ Provide the fully qualified domain name of the SMTP relay Postfix should use
+ for Case Organizer notifications. For example, use smtp.gmail.com when
+ relaying through Gmail.
+
+Template: case-organizer/smtp-port
+Type: string
+Default: 587
+Description: SMTP relay port
+ Enter the TCP port exposed by your SMTP relay. Port 587 is typical for
+ STARTTLS-enabled relays.
+
+Template: case-organizer/smtp-username
+Type: string
+Default:
+Description: SMTP authentication username
+ This value is written into /etc/postfix/main.cf and sasl_passwd so Postfix can
+ authenticate when delivering mail on behalf of Case Organizer.
+
+Template: case-organizer/smtp-password
+Type: password
+Default:
+Description: SMTP authentication password or app password
+ Provide the password or app-specific key that matches the SMTP username. It is
+ stored with root-only permissions and reused by Postfix and the web
+ application.
+
+Template: case-organizer/smtp-use-tls
+Type: boolean
+Default: true
+Description: Enable STARTTLS when sending mail
+ Choose “yes” to force Postfix to negotiate TLS with the relay. Disable this only
+ if your relay explicitly requires an unencrypted connection.

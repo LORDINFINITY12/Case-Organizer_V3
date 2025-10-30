@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        rm -f /etc/case-organizer/postfix.json
+        rm -f /var/lib/case-organizer/.config/case-organizer/postfix.json
+        rm -f /var/lib/case-organizer/.config/case-organizer/setup-postfix.sh
+        ;;
+esac
+
+exit 0

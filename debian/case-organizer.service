@@ -1,0 +1,16 @@
+[Unit]
+Description=Case Organizer (Flask)
+After=network.target
+
+[Service]
+Type=simple
+User=caseorg
+Group=caseorg
+EnvironmentFile=-/etc/case-organizer/case-organizer.env
+WorkingDirectory=/opt/case-organizer
+ExecStart=/usr/bin/python3 /opt/case-organizer/app.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+

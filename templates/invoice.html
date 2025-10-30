@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark">
+  <script>
+      (function () {
+          try {
+              const KEY = 'caseOrg.theme';
+              const saved = localStorage.getItem(KEY);
+              const wantsDark = saved ? (saved === 'dark')
+                  : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+              const defaultDark = true;
+              const useDark = saved ? (saved === 'dark') : defaultDark || wantsDark;
+              if (useDark) document.documentElement.setAttribute('data-theme', 'dark');
+          } catch (e) {}
+      })();
+  </script>
+  <title>Case Organizer – Generate Invoice</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/Case_Organizer_logo.png') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/invoice.css') }}" />
+</head>
+<body data-role="{{ current_user.role if current_user else '' }}">
+  <div class="app-shell">
+    <header class="topbar">
+      <a href="{{ url_for('home') }}" class="brand">Case Organizer</a>
+      <div class="spacer"></div>
+      {% if current_user %}
+        <a href="{{ url_for('messages_home') }}" class="messages-link" title="Messages">
+          <i class="fa-solid fa-envelope"></i>
+          {% if unread_count %}
+            <span class="badge">{{ unread_count }}</span>
+          {% endif %}
+        </a>
+        <a href="{{ url_for('account') }}" class="account-link" title="My Account">
+          <i class="fa-solid fa-user"></i>
+        </a>
+        <a href="{{ url_for('invoice_form') }}" class="invoice-link" aria-current="page" title="Generate Invoice">
+          <i class="fa-solid fa-file-invoice-dollar"></i>
+        </a>
+        {% if current_user.role == 'admin' %}
+          <a href="{{ url_for('admin_settings') }}" class="settings-link" title="Settings">
+            <i class="fa-solid fa-gear"></i>
+          </a>
+        {% endif %}
+      {% endif %}
+      <div class="user">{{ current_user.email if current_user else 'Guest' }}</div>
+      <button id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <i class="fa-solid fa-moon"></i>
+      </button>
+      <a href="{{ url_for('logout') }}" class="logout" title="Logout">
+        <i class="fa-solid fa-right-from-bracket"></i>
+      </a>
+    </header>
+
+    <main class="home enter-animate">
+      {% include "_flash.html" %}
+
+      <section class="invoice-page" aria-label="Invoice generator">
+        <div id="invoice-context"
+             data-case-year="{{ case_context.year if case_context else '' }}"
+             data-case-month="{{ case_context.month if case_context else '' }}"
+             data-case-name="{{ case_context.case if case_context else '' }}">
+        </div>
+        <h1>Generate Invoice</h1>
+        <p class="invoice-intro">
+          Fill in the invoice details below. All highlighted fields are directly editable.
+          When you are ready, download the PDF and print it from your preferred viewer.
+        </p>
+
+        {% if case_context %}
+          <div class="invoice-case-banner">
+            Invoice for <strong>{{ case_context.case }}</strong>
+            <span class="invoice-case-meta">({{ case_context.year }} / {{ case_context.month }})</span>
+          </div>
+        {% endif %}
+
+        <div class="invoice-actions">
+          <button
+            id="invoice-download"
+            class="btn-primary"
+            type="button"
+            data-download-url="{{ url_for('invoice_save') }}"
+          >
+            <i class="fa-solid fa-file-arrow-down"></i> Download &amp; Save Invoice
+          </button>
+        </div>
+
+        <p class="contenteditable-hint">
+          Tip: Click on any text that shows a dashed underline on focus to edit its value.
+          Add or remove line items as needed before exporting.
+        </p>
+
+        <div class="invoice-box">
+          <div class="invoice-top">
+            <div class="invoice-title" data-invoice-title>
+              <span>INVOICE</span>
+            </div>
+            <div class="invoice-meta">
+              <label>
+                <span class="meta-label">Invoice #</span>
+                <span contenteditable="true" data-invoice-number>0001</span>
+              </label>
+              <label>
+                <span class="meta-label">Date</span>
+                <span contenteditable="true" data-invoice-date>2025-10-11</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="invoice-parties">
+            <div class="party-block" data-issuer-block>
+              <p class="party-heading">From</p>
+              <p><span contenteditable="true" data-issuer-name>Advocate Name</span></p>
+              <p><span contenteditable="true">Address line 1</span></p>
+              <p><span contenteditable="true">City, State ZIP</span></p>
+              <p><span contenteditable="true">Phone &amp; Email</span></p>
+            </div>
+            <div class="party-block party-recipient" data-recipient-block>
+              <p class="party-heading">To</p>
+              <p><span contenteditable="true" data-client-name>Client Name</span></p>
+              <p><span contenteditable="true">Client Address line 1</span></p>
+              <p><span contenteditable="true">City, State ZIP</span></p>
+              <p><span contenteditable="true">Phone &amp; Email</span></p>
+            </div>
+          </div>
+
+          <table class="invoice-table" aria-label="Invoice line items">
+            <thead>
+              <tr class="heading">
+                <th scope="col" style="width: 10%;">S/N</th>
+                <th scope="col" style="width: 25%;">Item</th>
+                <th scope="col" style="width: 45%;">Description</th>
+                <th scope="col" style="width: 20%;">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="invoice-items"></tbody>
+            <tfoot>
+              <tr class="total">
+                <td colspan="3" class="total-label">Total</td>
+                <td class="total-value">
+                  <span id="invoice-total">0.00</span>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+
+          <button type="button" class="invoice-add" id="add-invoice-item">+ Add Item</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.CaseOrg = Object.assign(window.CaseOrg || {}, {
+      isAdmin: {{ (current_user and current_user.role == 'admin') | tojson }}
+    });
+  </script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/invoice.js') }}"></script>
+</body>
+</html>

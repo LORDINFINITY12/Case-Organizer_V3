@@ -1,0 +1,175 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+USER=caseorg
+GROUP=caseorg
+STATE_DIR=/var/lib/case-organizer
+LOG_DIR=/var/log/case-organizer
+ETC_DIR=/etc/case-organizer
+ENV_FILE=$ETC_DIR/case-organizer.env
+POSTFIX_MAIN_CF=/etc/postfix/main.cf
+POSTFIX_SASL=/etc/postfix/sasl_passwd
+CONFIG_DIR=$STATE_DIR/.config/case-organizer
+POSTFIX_APP_CACHE=$CONFIG_DIR/postfix.json
+POSTFIX_SETUP_SCRIPT=$CONFIG_DIR/setup-postfix.sh
+
+write_postfix_config() {
+    relayhost=$1
+    relayport=$2
+    username=$3
+    password=$4
+    use_tls=$5
+
+    relay_line="relayhost = [${relayhost}]:${relayport} ${username}:${password}"
+
+    cat >"$POSTFIX_MAIN_CF" <<POSTFIX
+${relay_line}
+smtp_use_tls = $( [ "$use_tls" = "true" ] && echo yes || echo no )
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
+smtp_sasl_security_options = noanonymous
+POSTFIX
+
+    printf '[%s]:%s %s:%s\n' "$relayhost" "$relayport" "$username" "$password" > "$POSTFIX_SASL"
+    chmod 0600 "$POSTFIX_SASL"
+    if command -v postmap >/dev/null 2>&1; then
+        postmap "$POSTFIX_SASL"
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable postfix.service || true
+        systemctl restart postfix.service || true
+    fi
+}
+
+cache_postfix_config() {
+    relayhost=$1
+    relayport=$2
+    username=$3
+    password=$4
+    use_tls=$5
+
+    if [ "$use_tls" = "true" ]; then
+        tls_value=yes
+    else
+        tls_value=no
+    fi
+
+    install -d -m 0750 -o "$USER" -g "$GROUP" "$CONFIG_DIR"
+    cat >"$POSTFIX_APP_CACHE" <<JSON
+{
+  "smtp_host": "${relayhost}",
+  "smtp_port": "${relayport}",
+  "smtp_username": "${username}",
+  "smtp_password": "${password}",
+  "smtp_use_tls": ${use_tls},
+  "smtp_from_email": "${username}"
+}
+JSON
+    chmod 0640 "$POSTFIX_APP_CACHE"
+    chown "$USER:$GROUP" "$POSTFIX_APP_CACHE"
+
+cat >"$POSTFIX_SETUP_SCRIPT" <<SCRIPT
+#!/bin/sh
+set -e
+
+MAIN_CF=/etc/postfix/main.cf
+SASL=/etc/postfix/sasl_passwd
+
+cat <<EOF | sudo tee "\$MAIN_CF" >/dev/null
+relayhost = [${relayhost}]:${relayport} ${username}:${password}
+smtp_use_tls = ${tls_value}
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
+smtp_sasl_security_options = noanonymous
+EOF
+
+printf '[${relayhost}]:${relayport} ${username}:${password}\n' | sudo tee "\$SASL" >/dev/null
+sudo chmod 600 "\$SASL"
+if command -v postmap >/dev/null 2>&1; then
+    sudo postmap "\$SASL"
+fi
+if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl enable postfix.service || true
+    sudo systemctl restart postfix.service || true
+fi
+echo "Postfix relay updated."
+SCRIPT
+    chmod 0600 "$POSTFIX_SETUP_SCRIPT"
+    chown "$USER:$GROUP" "$POSTFIX_SETUP_SCRIPT"
+}
+
+case "$1" in
+    configure)
+        mkdir -p "$STATE_DIR" "$LOG_DIR" "$ETC_DIR"
+
+        if ! getent group "$GROUP" >/dev/null; then
+            addgroup --system "$GROUP"
+        fi
+        if ! id "$USER" >/dev/null 2>&1; then
+            adduser --system --ingroup "$GROUP" --home "$STATE_DIR" --no-create-home "$USER"
+        fi
+
+        chown -R "$USER:$GROUP" "$STATE_DIR" "$LOG_DIR"
+
+        if [ ! -f "$ENV_FILE" ]; then
+            cat >"$ENV_FILE" <<'ENVEOF'
+# Case Organizer environment
+CASEORG_STATE_DIR=/var/lib/case-organizer
+# Change this to your mounted storage:
+CASEORG_FS_ROOT=/mount/nvme2/fs-files
+CASEORG_HOST=0.0.0.0
+CASEORG_PORT=5000
+ENVEOF
+        fi
+
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload || true
+            systemctl enable case-organizer.service || true
+        fi
+
+        db_get case-organizer/smtp-host
+        SMTP_HOST="$RET"
+        db_get case-organizer/smtp-port
+        SMTP_PORT="$RET"
+        db_get case-organizer/smtp-username
+        SMTP_USER="$RET"
+        db_get case-organizer/smtp-password
+        SMTP_PASS="$RET"
+        db_get case-organizer/smtp-use-tls
+        if [ "$RET" = "true" ]; then
+            SMTP_TLS=true
+        else
+            SMTP_TLS=false
+        fi
+
+        if [ -n "$SMTP_HOST" ] && [ -n "$SMTP_PORT" ] && [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASS" ]; then
+            write_postfix_config "$SMTP_HOST" "$SMTP_PORT" "$SMTP_USER" "$SMTP_PASS" "$SMTP_TLS"
+            cache_postfix_config "$SMTP_HOST" "$SMTP_PORT" "$SMTP_USER" "$SMTP_PASS" "$SMTP_TLS"
+        else
+            echo "Postfix SMTP configuration skipped: incomplete answers." >&2
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+
+case "$1" in
+    configure)
+        # nothing extra
+        ;;
+    *)
+        ;;
+esac
+
+db_stop
+exit 0

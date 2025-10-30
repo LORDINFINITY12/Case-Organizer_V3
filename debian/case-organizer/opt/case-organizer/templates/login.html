@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark">
+  <script>
+      (function () {
+          try {
+              const KEY = 'caseOrg.theme';
+              const saved = localStorage.getItem(KEY);
+              const wantsDark = saved ? (saved === 'dark')
+                  : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+              // Force dark by default unless user explicitly chose light
+              const defaultDark = true;
+              const useDark = saved ? (saved === 'dark') : defaultDark || wantsDark;
+              if (useDark) document.documentElement.setAttribute('data-theme', 'dark');
+          } catch (e) {}
+      })();
+  </script>
+  <title>Case Organizer – Login</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body class="login-body">
+  <div class="login-card login-enter">
+    <div class="login-icon"><i class="fa-solid fa-scale-balanced"></i></div>
+    <h1>Case Organizer</h1>
+    {% include '_flash.html' %}
+    <form method="post" class="login-form">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="you@example.com" value="{{ email or username }}" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="Password" required>
+      <button type="submit" class="btn-primary"><i class="fa-solid fa-door-open"></i> Sign In</button>
+    </form>
+    <footer class="login-foot">
+      <a href="{{ url_for('forgot_password') }}">Forgot your password?</a>
+    </footer>
+  </div>
+</body>
+</html>

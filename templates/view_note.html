@@ -1,0 +1,12 @@
+{% extends "_flash.html" %}
+{% block content %}
+<div class="container">
+  <h2>Edit Note.json</h2>
+  <form method="post">
+    <textarea name="note_content" rows="20" style="width:100%; font-family: monospace;">{{ content }}</textarea>
+    <br>
+    <button type="submit" class="btn btn-primary">Save</button>
+  </form>
+</div>
+{% endblock %}
+
