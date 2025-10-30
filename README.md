@@ -192,5 +192,5 @@ journalctl -u case-organizer.service
 
 ---
 
-**License:** MIT / Open Source  
+**License:** Personal Use License (see License for details)  
 **Current Release:** v3.1.2 (October 2025)
