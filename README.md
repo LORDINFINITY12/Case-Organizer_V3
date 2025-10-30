@@ -86,7 +86,10 @@ It introduces secure email-based authentication, internal messaging, integrated 
 ### UI and UX
 - Flattened, consistent styling across all pages.  
 - Password-visibility toggle on login form.  
-- Dark/light theme compatibility.  
+- Dark/light theme compatibility.
+  
+  ![Dark/Light Mode Comparison](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Dark-Light-Comparison.png)
+
 - Clear disabled states and keyboard-focus polish.
 
 ---
