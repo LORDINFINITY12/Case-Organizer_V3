@@ -1,4 +1,4 @@
-# Case Organizer v3.1.2
+# Case Organizer v3
 
 Case Organizer is a full-stack legal case-management and document-organization platform built with Flask.  
 It helps law practices structure, archive, and retrieve their case files, generate invoices, and manage internal communication — all within a private, self-hosted environment.
