@@ -86,10 +86,112 @@ body { margin: 0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto
 
 /* Shell */
 .topbar { height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--card); box-shadow: var(--shadow); position: sticky; top:0; z-index:2; }
-.topbar .brand { font-weight: 600; }
+.topbar .brand { font-weight: 600; text-decoration: none; color: inherit; }
 .topbar .spacer { flex: 1; }
 .topbar .theme-toggle { flex: 0 0 auto; margin-right: 6px; z-index: 1; }
 .topbar .logout { position: relative; z-index: 2; }
+.topbar .user {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.user-email-display,
+.user-dropdown-email,
+.user-menu-email {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.user-dropdown-trigger,
+.user-dropdown,
+.user-menu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+}
+.user-menu-toggle {
+  font: inherit;
+  background: transparent;
+  border: none;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  cursor: pointer;
+}
+.user-menu-toggle .fa-chevron-down {
+  font-size: 0.85em;
+  transition: transform 150ms ease;
+}
+.user-menu-toggle[aria-expanded="true"] .fa-chevron-down {
+  transform: rotate(180deg);
+}
+.user-menu-toggle:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 3px;
+}
+.user-menu-panel {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  min-width: 230px;
+  background-color: var(--card, #ffffff);
+  color: var(--text);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 12px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.20);
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  z-index: 50;
+}
+.user-menu-panel[hidden] { display: none !important; }
+.user-menu-item {
+  width: 100%;
+  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-radius: 0;
+  color: var(--text);
+  text-decoration: none;
+}
+.topbar .user-menu-panel .user-menu-item {
+  display: flex;
+  width: 100%;
+  color: var(--text);
+  background: transparent;
+}
+.user-menu-item + .user-menu-item { border-top: 1px solid rgba(15, 23, 42, 0.05); }
+.user-menu-item i { color: var(--muted); width: 18px; text-align: center; }
+.user-menu-item:hover { background: rgba(122, 166, 255, 0.10); }
+.user-menu-item:hover i { color: var(--accent); }
+.user-menu-item:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
+.user-menu-item[aria-current="page"] { background: rgba(122, 166, 255, 0.14); }
+.user-menu-panel .badge {
+  margin-left: auto;
+  background: #ef4444;
+  color: #ffffff;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 6px;
+  min-width: 18px;
+  text-align: center;
+}
+:root[data-theme="dark"] .user-menu-panel {
+  background-color: #111827;
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 18px 40px rgba(0,0,0,0.45);
+}
 .topbar .account-link {
   margin-right: 10px;
   color: var(--muted);

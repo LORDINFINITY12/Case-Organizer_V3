@@ -1,3 +1,18 @@
+case-organizer (3.2) unstable; urgency=medium
+
+  * Added a JSON "interpreter" view for Note.json, rendering structured case
+    notes into a readable layout while preserving raw JSON editing when
+    needed.
+  * Introduced a unified Case Notes / Case Law Brief editor powered by the
+    same interpreter, so both workflows share identical view/edit behaviour.
+  * Added Case Law upload + search flows with per-case brief notes.
+  * UI polish: Account dropdown menu now opens as a proper vertical list,
+    right-aligned to the trigger, and correctly hides when collapsed.
+  * Dev UX: Static CSS/JS links are cache-busted via mtime query params to
+    ensure UI updates appear immediately even with long cache headers.
+
+ -- Izumi <swarajswarupaggarwal@gmail.com>  Mon, 15 Dec 2025 19:45:00 +0530
+
 case-organizer (3.1.1) unstable; urgency=medium
 
   * Security Patch: User Auto-Logout after 10 mins of non-usage.

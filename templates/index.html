@@ -20,7 +20,7 @@
   <title>Case Organizer</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="stylesheet" href="{{ static_url('css/style.css') }}" />
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/Case_Organizer_logo.png') }}" />
   <meta name="color-scheme" content="light dark">
 </head>
@@ -30,25 +30,46 @@
       <a href="{{ url_for('home') }}" class="brand">Case Organizer</a>
       <div class="spacer"></div>
       {% if current_user %}
-        <a href="{{ url_for('messages_home') }}" class="messages-link" title="Messages">
-          <i class="fa-solid fa-envelope"></i>
-          {% if unread_count %}
-            <span class="badge">{{ unread_count }}</span>
-          {% endif %}
-        </a>
-        <a href="{{ url_for('account') }}" class="account-link" title="My Account">
-          <i class="fa-solid fa-user"></i>
-        </a>
-        <a href="{{ url_for('invoice_form') }}" class="invoice-link" title="Generate Invoice">
-          <i class="fa-solid fa-file-invoice-dollar"></i>
-        </a>
-        {% if current_user.role == 'admin' %}
-          <a href="{{ url_for('admin_settings') }}" class="settings-link" title="Settings">
-            <i class="fa-solid fa-gear"></i>
-          </a>
-        {% endif %}
+        <div class="user" data-user-menu>
+          <span class="user-menu-toggle"
+                role="button"
+                tabindex="0"
+                data-user-menu-toggle
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-label="Toggle account menu"
+                title="Account menu">
+            <span class="user-email-display">{{ current_user.email }}</span>
+            <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+          </span>
+          <div class="user-menu-panel" data-user-menu-panel role="menu" hidden>
+            <a href="{{ url_for('messages_home') }}" class="user-menu-item" role="menuitem">
+              <i class="fa-solid fa-envelope" aria-hidden="true"></i>
+              <span class="user-menu-label">Mail</span>
+              {% if unread_count %}
+                <span class="badge">{{ unread_count }}</span>
+              {% endif %}
+            </a>
+            <a href="{{ url_for('account') }}" class="user-menu-item" role="menuitem">
+              <i class="fa-solid fa-user" aria-hidden="true"></i>
+              <span class="user-menu-label">My Account</span>
+            </a>
+            <a href="{{ url_for('invoice_form') }}" class="user-menu-item" role="menuitem">
+              <i class="fa-solid fa-file-invoice-dollar" aria-hidden="true"></i>
+              <span class="user-menu-label">Generate Invoice</span>
+            </a>
+            {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('admin_settings') }}" class="user-menu-item" role="menuitem">
+                <i class="fa-solid fa-gear" aria-hidden="true"></i>
+                <span class="user-menu-label">Settings</span>
+              </a>
+            {% endif %}
+          </div>
+        </div>
       {% endif %}
-      <div class="user">{{ current_user.email if current_user else 'Guest' }}</div>
+      {% if not current_user %}
+        <div class="user">Guest</div>
+      {% endif %}
       <button id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
         <i class="fa-solid fa-moon"></i>
       </button>
@@ -137,11 +158,161 @@
               <h3 id="notesTitle">Case Notes (Note.json)</h3>
               <button class="btn-ghost" id="notesClose" aria-label="Close">✕</button>
           </div>
+          <div id="notesDisplay" class="notes-display"></div>
+
+          <div id="notesFormsMount"></div>
+
+          <template id="notesCaseFormTemplate">
+          <form id="notesCaseForm" class="notes-form" hidden>
+            <div class="note-section">
+              <h4>Parties</h4>
+              <div class="note-grid">
+                <label class="note-field">
+                  <span>Petitioner Name</span>
+                  <input id="note-case-pn" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>Petitioner Address</span>
+                  <input id="note-case-pa" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>Petitioner Contact</span>
+                  <input id="note-case-pc" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>Respondent Name</span>
+                  <input id="note-case-rn" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>Respondent Address</span>
+                  <input id="note-case-ra" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>Respondent Contact</span>
+                  <input id="note-case-rc" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>We’re Representing</span>
+                  <select id="note-case-party">
+                    <option value="">Select</option>
+                    <option value="Petitioner">Petitioner</option>
+                    <option value="Respondent">Respondent</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div class="note-section">
+              <h4>Classification</h4>
+              <div class="note-grid">
+                <label class="note-field">
+                  <span>Case Category</span>
+                  <select id="note-case-category" autocomplete="off">
+                    <option value="">Case Category</option>
+                  </select>
+                </label>
+                <label class="note-field">
+                  <span>Case Subcategory</span>
+                  <select id="note-case-subcategory" autocomplete="off" disabled>
+                    <option value="">Subcategory</option>
+                  </select>
+                </label>
+                <label class="note-field">
+                  <span>Case Type</span>
+                  <select id="note-case-type" autocomplete="off" disabled>
+                    <option value="">Case Type</option>
+                  </select>
+                </label>
+                <label class="note-field note-type-other is-hidden">
+                  <span>Case Type (Other)</span>
+                  <input id="note-case-type-other" type="text" autocomplete="off">
+                </label>
+              </div>
+            </div>
+
+            <div class="note-section">
+              <h4>Court of Origin</h4>
+              <div class="note-grid">
+                <label class="note-field">
+                  <span>State</span>
+                  <input id="note-case-origin-state" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>District</span>
+                  <input id="note-case-origin-district" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>Court / Forum</span>
+                  <input id="note-case-origin-forum" type="text" autocomplete="off">
+                </label>
+              </div>
+            </div>
+
+            <div class="note-section">
+              <h4>Current Court / Forum</h4>
+              <div class="note-grid">
+                <label class="note-field">
+                  <span>State</span>
+                  <input id="note-case-current-state" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>District</span>
+                  <input id="note-case-current-district" type="text" autocomplete="off">
+                </label>
+                <label class="note-field">
+                  <span>Court / Forum</span>
+                  <input id="note-case-current-forum" type="text" autocomplete="off">
+                </label>
+              </div>
+            </div>
+
+            <div class="note-section">
+              <h4>Additional Notes</h4>
+              <textarea id="note-case-additional" rows="4" class="note-wide"></textarea>
+            </div>
+          </form>
+          </template>
+
+          <template id="notesCaseLawFormTemplate">
+          <form id="notesCaseLawForm" class="notes-form" hidden>
+            <div class="note-grid">
+              <label class="note-field">
+                <span>Petitioner</span>
+                <input id="note-cl-petitioner" type="text" autocomplete="off">
+              </label>
+              <label class="note-field">
+                <span>Respondent</span>
+                <input id="note-cl-respondent" type="text" autocomplete="off">
+              </label>
+              <label class="note-field">
+                <span>Citation</span>
+                <input id="note-cl-citation" type="text" autocomplete="off">
+              </label>
+              <label class="note-field">
+                <span>Decision Year</span>
+                <input id="note-cl-year" type="number" inputmode="numeric" autocomplete="off">
+              </label>
+              <label class="note-field">
+                <span>Primary Classification</span>
+                <input id="note-cl-primary" type="text" autocomplete="off">
+              </label>
+              <label class="note-field">
+                <span>Case Type</span>
+                <input id="note-cl-type" type="text" autocomplete="off">
+              </label>
+            </div>
+            <div class="note-section">
+              <h4>Brief / Notes</h4>
+              <textarea id="note-cl-note" rows="6" class="note-wide"></textarea>
+            </div>
+          </form>
+          </template>
+
           <textarea id="notesEditor" class="notes-editor" spellcheck="false"></textarea>
           <div class="modal-actions">
               <button id="editNotesBtn" class="btn-secondary">Edit</button>
               <button id="saveNotesBtn" class="btn-primary" hidden>Save</button>
-              <button id="cancelNotesBtn" class="btn-ghost" hidden>Cancel</button>
+              <button id="cancelNotesBtn" class="btn-ghost" hidden>Back</button>
           </div>
       </div>
   </div>
@@ -185,6 +356,6 @@
       isAdmin: {{ (current_user and current_user.role == 'admin') | tojson }}
     });
   </script>
-  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  <script src="{{ static_url('js/main.js') }}"></script>
 </body>
 </html>

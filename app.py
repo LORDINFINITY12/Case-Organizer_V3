@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
+import time
 from functools import wraps
 from pathlib import Path
 import json
@@ -739,12 +740,34 @@ def require_admin_api(handler):
 
 
 # ---- Flask setup --------------------------------------------------------
+SLOW_REQ_THRESHOLD_MS = float(os.environ.get("CASEORG_SLOW_MS", "250") or "250")
+STATIC_MAX_AGE = int(os.environ.get("CASEORG_STATIC_MAX_AGE", "86400") or "86400")
+
+
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = SESSION_TIMEOUT
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = STATIC_MAX_AGE
 
 print("Running app.py from:", os.path.abspath(__file__))
 print("FS_ROOT:", FS_ROOT)
+
+# ---- Request timing (slow request logger) -------------------------------
+@app.before_request
+def _capture_request_start() -> None:
+    g._req_started_at = time.perf_counter()
+
+
+@app.after_request
+def _log_slow_requests(response):
+    started = getattr(g, "_req_started_at", None)
+    if started is None:
+        return response
+    duration_ms = (time.perf_counter() - started) * 1000.0
+    if duration_ms >= SLOW_REQ_THRESHOLD_MS and not _is_static_request():
+        app.logger.info("slow request %.1f ms %s %s", duration_ms, request.method, request.path)
+    return response
+
 
 # ---- Utilities ----------------------------------------------------------
 def ensure_root() -> None:
@@ -767,6 +790,30 @@ def _case_law_db_file() -> Path:
     if not root:
         raise RuntimeError("Storage root is not configured yet")
     return root / CASE_LAW_DB_NAME
+
+
+# Requests for static assets should not hit auth/session DB paths.
+def _is_static_request() -> bool:
+    endpoint = request.endpoint or ""
+    return endpoint == "static" or (request.path or "").startswith("/static/")
+
+
+_SETUP_CACHE = {"done": None, "checked_at": 0.0}
+_SETUP_CACHE_TTL = 300.0  # seconds
+
+
+def _setup_complete_cached() -> bool:
+    now = time.perf_counter()
+    if _SETUP_CACHE["done"] is True:
+        return True
+    if (now - _SETUP_CACHE["checked_at"]) < _SETUP_CACHE_TTL:
+        return bool(_SETUP_CACHE["done"])
+    _SETUP_CACHE["checked_at"] = now
+    try:
+        _SETUP_CACHE["done"] = bool(config.FS_ROOT) and count_users() > 0
+    except Exception:
+        _SETUP_CACHE["done"] = False
+    return bool(_SETUP_CACHE["done"])
 
 
 def _ensure_case_law_schema(conn: sqlite3.Connection) -> None:
@@ -887,6 +934,8 @@ def close_case_law_db(_: Optional[BaseException]) -> None:
 
 @app.before_request
 def _enforce_session_timeout():
+    if _is_static_request():
+        return
     user_id = session.get('user_id')
     if user_id is None:
         return
@@ -917,6 +966,8 @@ def _enforce_session_timeout():
 
 @app.before_request
 def _load_current_user() -> None:
+    if _is_static_request():
+        return
     g.current_user = None
     g.unread_count = 0
     user_id = session.get('user_id')
@@ -961,6 +1012,26 @@ def inject_current_user() -> Dict[str, Any]:
         "current_user": g.get('current_user'),
         "unread_count": g.get('unread_count', 0),
     }
+
+
+@app.context_processor
+def inject_static_url() -> Dict[str, Any]:
+    def static_url(filename: str) -> str:
+        safe_name = (filename or "").lstrip("/")
+        rel_path = Path(safe_name)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            return url_for("static", filename=safe_name)
+        try:
+            full_path = Path(app.static_folder) / rel_path
+            version = int(full_path.stat().st_mtime)
+        except OSError:
+            version = None
+
+        if version is None:
+            return url_for("static", filename=safe_name)
+        return url_for("static", filename=safe_name, v=version)
+
+    return {"static_url": static_url}
 
 
 def refresh_case_law_index(
@@ -1015,6 +1086,8 @@ def normalize_boolean_query(raw: str) -> str:
 
 @app.before_request
 def _require_setup():
+    if _is_static_request():
+        return
     allowed_endpoints = {
         "setup",
         "login",
@@ -1027,7 +1100,7 @@ def _require_setup():
 
     endpoint = request.endpoint or ""
 
-    if not is_initial_setup_complete():
+    if not _setup_complete_cached():
         if endpoint not in allowed_endpoints:
             return redirect(url_for("setup"))
         return
@@ -2570,7 +2643,11 @@ def static_serve():
     root = FS_ROOT.resolve()
     if not str(path).startswith(str(root)) or not path.is_file():
         return "Not found", 404
-    return send_file(path, as_attachment=download)
+    resp = send_file(path, as_attachment=download, conditional=True)
+    resp.cache_control.public = True
+    resp.cache_control.max_age = STATIC_MAX_AGE
+    resp.expires = datetime.utcnow() + timedelta(seconds=STATIC_MAX_AGE)
+    return resp
 
 # ---- Search -------------------------------------------------------------
 

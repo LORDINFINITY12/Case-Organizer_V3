@@ -22,6 +22,133 @@ function escapeHtml(value){
   return String(value ?? '').replace(/[&<>\"']/g, ch => HTML_ESCAPE[ch] || ch);
 }
 
+function bindUserMenus(){
+  const menus = Array.from(document.querySelectorAll('[data-user-menu]'));
+  if (!menus.length) return;
+  if (document.documentElement.dataset.userMenusBound === '1') return;
+  document.documentElement.dataset.userMenusBound = '1';
+
+  let openMenu = null;
+
+  const getParts = (menu) => {
+    if (!menu) return { toggle: null, panel: null };
+    return {
+      toggle: menu.querySelector('[data-user-menu-toggle]'),
+      panel: menu.querySelector('[data-user-menu-panel]'),
+    };
+  };
+
+  const closeMenu = (menu) => {
+    const { toggle, panel } = getParts(menu);
+    if (!toggle || !panel) return;
+    panel.hidden = true;
+    panel.style.left = '';
+    panel.style.top = '';
+    panel.style.right = '';
+    panel.style.visibility = '';
+    toggle.setAttribute('aria-expanded', 'false');
+    if (openMenu === menu) openMenu = null;
+  };
+
+  const positionPanel = (toggle, panel) => {
+    const rect = toggle.getBoundingClientRect();
+    const padding = 16;
+    const width = panel.getBoundingClientRect().width || 230;
+    // Align the panel to the toggle's right edge (dropdown opens from the right)
+    let left = rect.right - width;
+    const maxLeft = window.innerWidth - width - padding;
+    if (left > maxLeft) left = Math.max(padding, maxLeft);
+    if (left < padding) left = padding;
+    panel.style.position = 'fixed';
+    panel.style.left = `${left}px`;
+    panel.style.top = `${rect.bottom + 12}px`;
+    panel.style.right = 'auto';
+  };
+
+  const openMenuFor = (menu) => {
+    menus.forEach((m) => { if (m !== menu) closeMenu(m); });
+    const { toggle, panel } = getParts(menu);
+    if (!toggle || !panel) return;
+    panel.hidden = false;
+    panel.style.visibility = 'hidden';
+    positionPanel(toggle, panel);
+    panel.style.visibility = '';
+    toggle.setAttribute('aria-expanded', 'true');
+    openMenu = menu;
+  };
+
+  const toggleMenu = (menu) => {
+    const { panel } = getParts(menu);
+    if (!panel) return;
+    if (panel.hidden) openMenuFor(menu);
+    else closeMenu(menu);
+  };
+
+  menus.forEach((menu) => {
+    const { toggle, panel } = getParts(menu);
+    if (!toggle || !panel) return;
+
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      toggleMenu(menu);
+    });
+
+    toggle.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        openMenuFor(menu);
+        const first = menu.querySelector('.user-menu-panel a, .user-menu-panel button, .user-menu-panel [tabindex]:not([tabindex="-1"])');
+        first?.focus();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMenu(menu);
+      }
+    });
+
+    panel.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMenu(menu);
+        toggle.focus();
+      }
+    });
+
+    panel.addEventListener('click', (e) => {
+      const link = e.target.closest('a');
+      if (link) {
+        closeMenu(menu);
+      }
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!openMenu) return;
+    if (openMenu.contains(e.target)) return;
+    closeMenu(openMenu);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!openMenu) return;
+    const { toggle } = getParts(openMenu);
+    closeMenu(openMenu);
+    toggle?.focus();
+  });
+
+  const refreshOpenMenuPosition = () => {
+    if (!openMenu) return;
+    const { toggle, panel } = getParts(openMenu);
+    if (!toggle || !panel || panel.hidden) return;
+    panel.style.visibility = 'hidden';
+    positionPanel(toggle, panel);
+    panel.style.visibility = '';
+  };
+
+  window.addEventListener('resize', refreshOpenMenuPosition);
+  window.addEventListener('scroll', refreshOpenMenuPosition, true);
+}
+
 const CASEORG_STATE = window.CaseOrg || {};
 const CASEORG_IS_ADMIN = Boolean(CASEORG_STATE.isAdmin);
 
@@ -1972,6 +2099,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Theme
   initTheme();
   setupThemeToggle();
+  bindUserMenus();
 
   // Year dropdown in Advanced Search
   initYearDropdown('year-dd', 'year', 2025);

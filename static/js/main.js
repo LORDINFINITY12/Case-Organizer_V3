@@ -22,6 +22,133 @@ function escapeHtml(value){
   return String(value ?? '').replace(/[&<>\"']/g, ch => HTML_ESCAPE[ch] || ch);
 }
 
+function bindUserMenus(){
+  const menus = Array.from(document.querySelectorAll('[data-user-menu]'));
+  if (!menus.length) return;
+  if (document.documentElement.dataset.userMenusBound === '1') return;
+  document.documentElement.dataset.userMenusBound = '1';
+
+  let openMenu = null;
+
+  const getParts = (menu) => {
+    if (!menu) return { toggle: null, panel: null };
+    return {
+      toggle: menu.querySelector('[data-user-menu-toggle]'),
+      panel: menu.querySelector('[data-user-menu-panel]'),
+    };
+  };
+
+  const closeMenu = (menu) => {
+    const { toggle, panel } = getParts(menu);
+    if (!toggle || !panel) return;
+    panel.hidden = true;
+    panel.style.left = '';
+    panel.style.top = '';
+    panel.style.right = '';
+    panel.style.visibility = '';
+    toggle.setAttribute('aria-expanded', 'false');
+    if (openMenu === menu) openMenu = null;
+  };
+
+  const positionPanel = (toggle, panel) => {
+    const rect = toggle.getBoundingClientRect();
+    const padding = 16;
+    const width = panel.getBoundingClientRect().width || 230;
+    // Align the panel to the toggle's right edge (dropdown opens from the right)
+    let left = rect.right - width;
+    const maxLeft = window.innerWidth - width - padding;
+    if (left > maxLeft) left = Math.max(padding, maxLeft);
+    if (left < padding) left = padding;
+    panel.style.position = 'fixed';
+    panel.style.left = `${left}px`;
+    panel.style.top = `${rect.bottom + 12}px`;
+    panel.style.right = 'auto';
+  };
+
+  const openMenuFor = (menu) => {
+    menus.forEach((m) => { if (m !== menu) closeMenu(m); });
+    const { toggle, panel } = getParts(menu);
+    if (!toggle || !panel) return;
+    panel.hidden = false;
+    panel.style.visibility = 'hidden';
+    positionPanel(toggle, panel);
+    panel.style.visibility = '';
+    toggle.setAttribute('aria-expanded', 'true');
+    openMenu = menu;
+  };
+
+  const toggleMenu = (menu) => {
+    const { panel } = getParts(menu);
+    if (!panel) return;
+    if (panel.hidden) openMenuFor(menu);
+    else closeMenu(menu);
+  };
+
+  menus.forEach((menu) => {
+    const { toggle, panel } = getParts(menu);
+    if (!toggle || !panel) return;
+
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      toggleMenu(menu);
+    });
+
+    toggle.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        openMenuFor(menu);
+        const first = menu.querySelector('.user-menu-panel a, .user-menu-panel button, .user-menu-panel [tabindex]:not([tabindex="-1"])');
+        first?.focus();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMenu(menu);
+      }
+    });
+
+    panel.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMenu(menu);
+        toggle.focus();
+      }
+    });
+
+    panel.addEventListener('click', (e) => {
+      const link = e.target.closest('a');
+      if (link) {
+        closeMenu(menu);
+      }
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!openMenu) return;
+    if (openMenu.contains(e.target)) return;
+    closeMenu(openMenu);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!openMenu) return;
+    const { toggle } = getParts(openMenu);
+    closeMenu(openMenu);
+    toggle?.focus();
+  });
+
+  const refreshOpenMenuPosition = () => {
+    if (!openMenu) return;
+    const { toggle, panel } = getParts(openMenu);
+    if (!toggle || !panel || panel.hidden) return;
+    panel.style.visibility = 'hidden';
+    positionPanel(toggle, panel);
+    panel.style.visibility = '';
+  };
+
+  window.addEventListener('resize', refreshOpenMenuPosition);
+  window.addEventListener('scroll', refreshOpenMenuPosition, true);
+}
+
 const CASEORG_STATE = window.CaseOrg || {};
 const CASEORG_IS_ADMIN = Boolean(CASEORG_STATE.isAdmin);
 
@@ -1705,7 +1832,17 @@ function caseLawSearchForm(){
 // -------------------- Notes modal global handlers --------------------
 function bindGlobalNotesModalHandlers(){
   const modal   = document.getElementById('notesModal');
+  const modalContent = modal?.querySelector('.modal-content');
   const editor  = document.getElementById('notesEditor');
+  const viewer  = document.getElementById('notesDisplay');
+  let caseForm = null;
+  let caseLawForm = null;
+  let casePartySel = null;
+  let caseCatSel = null;
+  let caseSubcatSel = null;
+  let caseTypeSel = null;
+  let caseTypeOther = null;
+  let caseTypeOtherField = null;
   const saveBtn = document.getElementById('saveNotesBtn');
   const cancel  = document.getElementById('cancelNotesBtn');
   const close   = document.getElementById('notesClose');
@@ -1714,11 +1851,212 @@ function bindGlobalNotesModalHandlers(){
 
   if (!modal || !editor || !saveBtn || !cancel || !close || !editBtn) return;
 
-  const NOTE_ESCAPE_RE = /\\r\\n|\\n|\\r/g;
+  const NOTE_ESCAPE_RE = /\r\n|\n|\r|\\r\\n|\\n|\\r/g;
 
-  function asViewText(raw){
-    if (!raw) return '';
-    return raw.replace(NOTE_ESCAPE_RE, '\n');
+  function refreshNotesFormRefs(){
+    caseForm = document.getElementById('notesCaseForm');
+    caseLawForm = document.getElementById('notesCaseLawForm');
+    casePartySel = document.getElementById('note-case-party');
+    caseCatSel = document.getElementById('note-case-category');
+    caseSubcatSel = document.getElementById('note-case-subcategory');
+    caseTypeSel = document.getElementById('note-case-type');
+    caseTypeOther = document.getElementById('note-case-type-other');
+    caseTypeOtherField = caseTypeOther?.closest('.note-type-other') || null;
+
+    [caseForm, caseLawForm].forEach((form) => {
+      if (!form || form.dataset.noSubmit === '1') return;
+      form.dataset.noSubmit = '1';
+      form.addEventListener('submit', (e) => e.preventDefault());
+    });
+  }
+
+  function ensureNotesFormMounted(kind){
+    const mount = document.getElementById('notesFormsMount');
+    if (!mount) return;
+
+    if (kind === 'case-law') {
+      if (document.getElementById('notesCaseLawForm')) return;
+      const tpl = document.getElementById('notesCaseLawFormTemplate');
+      if (tpl && tpl.content) mount.appendChild(tpl.content.cloneNode(true));
+    } else {
+      if (document.getElementById('notesCaseForm')) return;
+      const tpl = document.getElementById('notesCaseFormTemplate');
+      if (tpl && tpl.content) mount.appendChild(tpl.content.cloneNode(true));
+    }
+  }
+
+  const getVal = (id) => {
+    const el = document.getElementById(id);
+    return el ? el.value.trim() : '';
+  };
+  const setVal = (id, value = '') => {
+    const el = document.getElementById(id);
+    if (el) el.value = value || '';
+  };
+
+  function safeParseJson(raw){
+    if (!raw || !String(raw).trim()) return {};
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  const formatValue = (value) => escapeHtml(String(value || '—')).replace(NOTE_ESCAPE_RE, '<br>');
+
+  function currentKind(){
+    return noteContext && noteContext.kind === 'case-law' ? 'case-law' : 'case';
+  }
+
+  const CASE_NOTE_CATEGORIES = ['Criminal','Civil','Commercial'];
+
+  function showCaseTypeOther(show){
+    if (!caseTypeOtherField) return;
+    caseTypeOtherField.classList.toggle('is-hidden', !show);
+  }
+
+  function setCaseCategoryOptions(selected){
+    if (!caseCatSel) return;
+    populateOptions(caseCatSel, CASE_NOTE_CATEGORIES, 'Case Category');
+    caseCatSel.value = CASE_NOTE_CATEGORIES.includes(selected) ? selected : '';
+  }
+
+  function setCaseSubcategoryOptions(category, selected){
+    if (!caseSubcatSel) return;
+    if (category && SUBCATS[category]) {
+      populateOptions(caseSubcatSel, SUBCATS[category], 'Subcategory');
+      caseSubcatSel.disabled = false;
+      caseSubcatSel.value = selected && SUBCATS[category].includes(selected) ? selected : '';
+    } else {
+      caseSubcatSel.innerHTML = '<option value=\"\">Subcategory</option>';
+      caseSubcatSel.disabled = true;
+    }
+  }
+
+  function setCaseTypeOptions(category, selected){
+    if (!caseTypeSel) return;
+    if (category && CASE_TYPES[category]) {
+      populateOptions(caseTypeSel, CASE_TYPES[category], 'Case Type');
+      caseTypeSel.disabled = false;
+      if (selected && CASE_TYPES[category].includes(selected)) {
+        caseTypeSel.value = selected;
+        showCaseTypeOther(false);
+      } else if (selected) {
+        caseTypeSel.value = 'Others';
+        if (caseTypeOther) caseTypeOther.value = selected;
+        showCaseTypeOther(true);
+      } else {
+        caseTypeSel.value = '';
+        showCaseTypeOther(false);
+      }
+    } else {
+      caseTypeSel.innerHTML = '<option value=\"\">Case Type</option>';
+      caseTypeSel.disabled = true;
+      showCaseTypeOther(false);
+    }
+  }
+
+  function normalizeCaseNote(rawObj){
+    const obj = (rawObj && typeof rawObj === 'object') ? rawObj : {};
+    const origin = obj['Court of Origin'] || {};
+    const current = obj['Current Court/Forum'] || {};
+    return {
+      petitionerName: obj['Petitioner Name'] || '',
+      petitionerAddress: obj['Petitioner Address'] || '',
+      petitionerContact: obj['Petitioner Contact'] || '',
+      respondentName: obj['Respondent Name'] || '',
+      respondentAddress: obj['Respondent Address'] || '',
+      respondentContact: obj['Respondent Contact'] || '',
+      ourParty: obj['Our Party'] || '',
+      caseCategory: obj['Case Category'] || '',
+      caseSubcategory: obj['Case Subcategory'] || '',
+      caseType: obj['Case Type'] || '',
+      originState: origin['State'] || '',
+      originDistrict: origin['District'] || '',
+      originForum: origin['Court/Forum'] || '',
+      currentState: current['State'] || '',
+      currentDistrict: current['District'] || '',
+      currentForum: current['Court/Forum'] || '',
+      additionalNotes: obj['Additional Notes'] || '',
+    };
+  }
+
+  function normalizeCaseLawNote(rawObj){
+    const obj = (rawObj && typeof rawObj === 'object') ? rawObj : {};
+    return {
+      petitioner: obj['Petitioner'] || '',
+      respondent: obj['Respondent'] || '',
+      citation: obj['Citation'] || '',
+      decisionYear: obj['Decision Year'] || '',
+      primaryType: obj['Primary Type'] || '',
+      caseType: obj['Case Type'] || obj['Subtype'] || '',
+      note: obj['Note'] || obj['Brief'] || '',
+      savedAt: obj['Saved At'] || '',
+    };
+  }
+
+  function renderCaseNoteView(data){
+    if (!viewer) return;
+    viewer.innerHTML = `
+      <div class="note-section">
+        <div class="note-heading">Parties</div>
+        <div class="note-row"><span class="note-label">Petitioner</span><span class="note-value">${formatValue(data.petitionerName)}</span></div>
+        <div class="note-row"><span class="note-label">Petitioner Address</span><span class="note-value">${formatValue(data.petitionerAddress)}</span></div>
+        <div class="note-row"><span class="note-label">Petitioner Contact</span><span class="note-value">${formatValue(data.petitionerContact)}</span></div>
+        <div class="note-row"><span class="note-label">Respondent</span><span class="note-value">${formatValue(data.respondentName)}</span></div>
+        <div class="note-row"><span class="note-label">Respondent Address</span><span class="note-value">${formatValue(data.respondentAddress)}</span></div>
+        <div class="note-row"><span class="note-label">Respondent Contact</span><span class="note-value">${formatValue(data.respondentContact)}</span></div>
+        <div class="note-row"><span class="note-label">We’re Representing</span><span class="note-value">${formatValue(data.ourParty)}</span></div>
+      </div>
+      <div class="note-section">
+        <div class="note-heading">Classification</div>
+        <div class="note-row"><span class="note-label">Case Category</span><span class="note-value">${formatValue(data.caseCategory)}</span></div>
+        <div class="note-row"><span class="note-label">Case Subcategory</span><span class="note-value">${formatValue(data.caseSubcategory)}</span></div>
+        <div class="note-row"><span class="note-label">Case Type</span><span class="note-value">${formatValue(data.caseType)}</span></div>
+      </div>
+      <div class="note-section">
+        <div class="note-heading">Court of Origin</div>
+        <div class="note-row"><span class="note-label">State</span><span class="note-value">${formatValue(data.originState)}</span></div>
+        <div class="note-row"><span class="note-label">District</span><span class="note-value">${formatValue(data.originDistrict)}</span></div>
+        <div class="note-row"><span class="note-label">Court / Forum</span><span class="note-value">${formatValue(data.originForum)}</span></div>
+      </div>
+      <div class="note-section">
+        <div class="note-heading">Current Court / Forum</div>
+        <div class="note-row"><span class="note-label">State</span><span class="note-value">${formatValue(data.currentState)}</span></div>
+        <div class="note-row"><span class="note-label">District</span><span class="note-value">${formatValue(data.currentDistrict)}</span></div>
+        <div class="note-row"><span class="note-label">Court / Forum</span><span class="note-value">${formatValue(data.currentForum)}</span></div>
+      </div>
+      <div class="note-section note-additional">
+        <div class="note-row"><span class="note-value note-wide">${formatValue(data.additionalNotes || '—')}</span></div>
+      </div>
+    `;
+  }
+
+  function renderCaseLawNoteView(data){
+    if (!viewer) return;
+    const saved = data.savedAt ? `<div class="note-row small"><span class="note-label">Saved</span><span class="note-value">${formatValue(data.savedAt)}</span></div>` : '';
+    viewer.innerHTML = `
+      <div class="note-section">
+        <div class="note-heading">Brief</div>
+        <div class="note-row"><span class="note-label">Petitioner</span><span class="note-value">${formatValue(data.petitioner)}</span></div>
+        <div class="note-row"><span class="note-label">Respondent</span><span class="note-value">${formatValue(data.respondent)}</span></div>
+        <div class="note-row"><span class="note-label">Citation</span><span class="note-value">${formatValue(data.citation)}</span></div>
+        <div class="note-row"><span class="note-label">Decision Year</span><span class="note-value">${formatValue(data.decisionYear)}</span></div>
+        <div class="note-row"><span class="note-label">Primary Type</span><span class="note-value">${formatValue(data.primaryType)}</span></div>
+        <div class="note-row"><span class="note-label">Case Type</span><span class="note-value">${formatValue(data.caseType)}</span></div>
+        ${saved}
+      </div>
+      <div class="note-section note-additional">
+        <div class="note-row"><span class="note-value note-wide">${formatValue(data.note || '—')}</span></div>
+      </div>
+    `;
+  }
+
+  function renderFallback(raw){
+    if (viewer) {
+      viewer.innerHTML = `<pre class="notes-pre">${escapeHtml(raw || 'No note saved yet.')}</pre>`;
+    }
   }
 
   let originalContent = '';
@@ -1736,23 +2074,179 @@ function bindGlobalNotesModalHandlers(){
       saveBtn.disabled = true;
       return;
     }
-    saveBtn.disabled = editor.value === originalContent;
+    const editingRaw = editor && editor.style.display !== 'none';
+    if (editingRaw) {
+      saveBtn.disabled = editor.value === originalContent;
+    } else {
+      saveBtn.disabled = false;
+    }
+  }
+
+  function hideAllEditors(){
+    if (viewer) viewer.hidden = true;
+    if (caseForm) { caseForm.hidden = true; caseForm.classList.remove('is-active'); }
+    if (caseLawForm) { caseLawForm.hidden = true; caseLawForm.classList.remove('is-active'); }
+    if (editor) editor.style.display = 'none';
+  }
+
+  function populateForm(kind, parsedObj){
+    if (kind === 'case') {
+      const data = normalizeCaseNote(parsedObj);
+      setVal('note-case-pn', data.petitionerName);
+      setVal('note-case-pa', data.petitionerAddress);
+      setVal('note-case-pc', data.petitionerContact);
+      setVal('note-case-rn', data.respondentName);
+      setVal('note-case-ra', data.respondentAddress);
+      setVal('note-case-rc', data.respondentContact);
+      if (casePartySel) {
+        casePartySel.value = data.ourParty || '';
+      }
+      setCaseCategoryOptions(data.caseCategory || '');
+      setCaseSubcategoryOptions(data.caseCategory || '', data.caseSubcategory || '');
+      setCaseTypeOptions(data.caseCategory || '', data.caseType || '');
+      setVal('note-case-origin-state', data.originState);
+      setVal('note-case-origin-district', data.originDistrict);
+      setVal('note-case-origin-forum', data.originForum);
+      setVal('note-case-current-state', data.currentState);
+      setVal('note-case-current-district', data.currentDistrict);
+      setVal('note-case-current-forum', data.currentForum);
+      setVal('note-case-additional', data.additionalNotes);
+    } else {
+      const data = normalizeCaseLawNote(parsedObj);
+      setVal('note-cl-petitioner', data.petitioner);
+      setVal('note-cl-respondent', data.respondent);
+      setVal('note-cl-citation', data.citation);
+      setVal('note-cl-year', data.decisionYear);
+      setVal('note-cl-primary', data.primaryType);
+      setVal('note-cl-type', data.caseType);
+      const noteBox = document.getElementById('note-cl-note');
+      if (noteBox) noteBox.value = data.note || '';
+    }
+  }
+
+  function renderView(parsedObj){
+    const kind = currentKind();
+    if (parsedObj === null) {
+      renderFallback(rawContent);
+      return;
+    }
+    if (kind === 'case-law') {
+      renderCaseLawNoteView(normalizeCaseLawNote(parsedObj));
+    } else {
+      renderCaseNoteView(normalizeCaseNote(parsedObj));
+    }
+  }
+
+  function buildPayloadFromForm(kind){
+    const existing = safeParseJson(rawContent) || {};
+    if (kind === 'case-law' && caseLawForm && !caseLawForm.hidden) {
+      const payload = { ...existing };
+      payload['Petitioner'] = getVal('note-cl-petitioner');
+      payload['Respondent'] = getVal('note-cl-respondent');
+      payload['Citation'] = getVal('note-cl-citation');
+      payload['Decision Year'] = getVal('note-cl-year');
+      payload['Primary Type'] = getVal('note-cl-primary');
+      payload['Case Type'] = getVal('note-cl-type');
+      payload['Note'] = document.getElementById('note-cl-note')?.value || '';
+      payload['Saved At'] = new Date().toISOString();
+      return JSON.stringify(payload, null, 2);
+    }
+    if (kind === 'case' && caseForm && !caseForm.hidden) {
+      const payload = { ...existing };
+      payload['Petitioner Name'] = getVal('note-case-pn');
+      payload['Petitioner Address'] = getVal('note-case-pa');
+      payload['Petitioner Contact'] = getVal('note-case-pc');
+      payload['Respondent Name'] = getVal('note-case-rn');
+      payload['Respondent Address'] = getVal('note-case-ra');
+      payload['Respondent Contact'] = getVal('note-case-rc');
+      payload['Our Party'] = casePartySel ? (casePartySel.value || '') : getVal('note-case-party');
+      const catVal = caseCatSel ? (caseCatSel.value || '') : getVal('note-case-category');
+      const subVal = caseSubcatSel ? (caseSubcatSel.value || '') : getVal('note-case-subcategory');
+      const typeSelVal = caseTypeSel ? (caseTypeSel.value || '') : getVal('note-case-type');
+      const typeOtherVal = caseTypeOther ? (caseTypeOther.value || '') : '';
+      const finalType = (typeSelVal === 'Others') ? typeOtherVal : typeSelVal;
+      payload['Case Category'] = catVal;
+      payload['Case Subcategory'] = subVal;
+      payload['Case Type'] = finalType;
+      payload['Court of Origin'] = {
+        'State': getVal('note-case-origin-state'),
+        'District': getVal('note-case-origin-district'),
+        'Court/Forum': getVal('note-case-origin-forum'),
+      };
+      payload['Current Court/Forum'] = {
+        'State': getVal('note-case-current-state'),
+        'District': getVal('note-case-current-district'),
+        'Court/Forum': getVal('note-case-current-forum'),
+      };
+      payload['Additional Notes'] = document.getElementById('note-case-additional')?.value || '';
+      return JSON.stringify(payload, null, 2);
+    }
+    return null;
   }
 
   function setState(state){
     modal.dataset.state = state;
+    refreshNotesFormRefs();
     const editing = state === 'edit';
-    editor.readOnly = !editing;
-    editor.classList.toggle('notes-readonly', !editing);
-    toggleVisibility(saveBtn, editing);
-    toggleVisibility(cancel, editing);
-    toggleVisibility(editBtn, !(editing || modal.dataset.intent === 'create'));
+    const parsed = safeParseJson(rawContent);
+    hideAllEditors();
+    if (modalContent) {
+      modalContent.classList.toggle('mode-edit', editing);
+      modalContent.classList.toggle('mode-view', !editing);
+    }
+
     if (!editing) {
-      editor.value = asViewText(rawContent);
-      // ensure caret doesn't stay focused when in view mode
-      editor.blur();
-    } else {
-      editor.value = rawContent;
+      if (viewer) viewer.hidden = false;
+      renderView(parsed);
+      editor.readOnly = true;
+      editor.classList.add('notes-readonly');
+      toggleVisibility(saveBtn, false);
+      toggleVisibility(cancel, false);
+      toggleVisibility(editBtn, true);
+	    } else {
+	      if (viewer) viewer.hidden = true;
+	      const kind = currentKind();
+	      const canUseForm = parsed !== null;
+	      if (canUseForm) {
+	        ensureNotesFormMounted(kind);
+	        refreshNotesFormRefs();
+	      }
+	      if (canUseForm && kind === 'case-law' && caseLawForm) {
+	        populateForm('case-law', parsed || {});
+	        caseLawForm.hidden = false;
+	        caseLawForm.classList.add('is-active');
+	      } else if (canUseForm && kind === 'case' && caseForm) {
+        populateForm('case', parsed || {});
+        caseForm.hidden = false;
+        caseForm.classList.add('is-active');
+        if (!caseForm.dataset.wired) {
+          caseForm.dataset.wired = '1';
+          caseCatSel?.addEventListener('change', () => {
+            const cat = caseCatSel.value || '';
+            setCaseSubcategoryOptions(cat, '');
+            setCaseTypeOptions(cat, '');
+          });
+          caseTypeSel?.addEventListener('change', () => {
+            const val = caseTypeSel.value || '';
+            if (val === 'Others') {
+              showCaseTypeOther(true);
+            } else {
+              if (caseTypeOther) caseTypeOther.value = '';
+              showCaseTypeOther(false);
+            }
+          });
+        }
+      } else {
+        editor.value = rawContent || '';
+        editor.style.display = 'block';
+        if (viewer) viewer.hidden = true;
+      }
+
+      editor.readOnly = false;
+      editor.classList.remove('notes-readonly');
+      toggleVisibility(saveBtn, true);
+      toggleVisibility(cancel, true);
+      toggleVisibility(editBtn, false);
     }
     updateDirtyState();
   }
@@ -1762,15 +2256,15 @@ function bindGlobalNotesModalHandlers(){
     rawContent = content || '';
     originalContent = rawContent;
     setState(intent === 'create' ? 'edit' : 'view');
-    editor.style.display = 'block';
+    if (viewer) viewer.hidden = modal.dataset.state === 'edit';
     modal.removeAttribute('hidden');
     modal.setAttribute('aria-hidden','false');
     if (title) {
       title.textContent = intent === 'create' ? 'Create Note.json' : 'Case Notes (Note.json)';
     }
     if (modal.dataset.state === 'edit') {
-      editor.focus();
-      editor.setSelectionRange(editor.value.length, editor.value.length);
+      const target = editor && editor.style.display !== 'none' ? editor : (caseForm && !caseForm.hidden ? caseForm : caseLawForm);
+      target?.focus();
     }
   }
 
@@ -1779,7 +2273,10 @@ function bindGlobalNotesModalHandlers(){
     modal.setAttribute('aria-hidden','true');
     editor.readOnly = true;
     editor.blur();
-    editor.style.display = 'none';
+    if (editor) editor.style.display = 'none';
+    if (viewer) viewer.hidden = true;
+    if (caseForm) caseForm.hidden = true;
+    if (caseLawForm) caseLawForm.hidden = true;
     noteContext = null;
   }
 
@@ -1792,13 +2289,15 @@ function bindGlobalNotesModalHandlers(){
   editBtn.addEventListener('click', () => {
     rawContent = originalContent;
     setState('edit');
-    editor.focus();
-    editor.setSelectionRange(editor.value.length, editor.value.length);
+    const target = editor && editor.style.display !== 'none' ? editor : (caseForm && !caseForm.hidden ? caseForm : caseLawForm);
+    target?.focus();
   });
 
   async function saveCurrent(){
     const intent = modal.dataset.intent === 'create' ? 'create' : 'update';
-    const payloadContent = editor.value;
+    const kind = currentKind();
+    const formPayload = buildPayloadFromForm(kind);
+    const payloadContent = formPayload !== null ? formPayload : editor.value;
 
     if (noteContext && noteContext.kind === 'case-law') {
       const caseId = noteContext.id;
@@ -1816,17 +2315,16 @@ function bindGlobalNotesModalHandlers(){
         if (!resp.ok || !data.ok) {
           throw new Error(data.msg || `HTTP ${resp.status}`);
         }
-        rawContent = editor.value;
+        rawContent = payloadContent;
         originalContent = rawContent;
-        alert('Notes saved!');
+        showClientFlash('Notes saved.', 'success');
         if (typeof noteContext.onSaved === 'function') {
           noteContext.onSaved(data.summary || '');
         }
         modal.dataset.intent = 'update';
         setState('view');
-        closeModal();
       } catch (err) {
-        alert(`Save failed: ${err.message || err}`);
+        showClientFlash(`Save failed: ${err.message || err}`, 'error');
       }
       return;
     }
@@ -1863,17 +2361,16 @@ function bindGlobalNotesModalHandlers(){
       if (!resp.ok || !data.ok) {
         throw new Error(data.msg || `HTTP ${resp.status}`);
       }
-      rawContent = editor.value;
+      rawContent = payloadContent;
       originalContent = rawContent;
-      alert(intent === 'create' ? 'Note.json created!' : 'Notes saved!');
+      showClientFlash(intent === 'create' ? 'Note.json created.' : 'Notes saved.', 'success');
       modal.dataset.intent = 'update';
       setState('view');
-      closeModal();
       if (typeof window.__refreshNoteButton === 'function') {
         window.__refreshNoteButton();
       }
     } catch (err) {
-      alert(`Save failed: ${err.message || err}`);
+      showClientFlash(`Save failed: ${err.message || err}`, 'error');
     }
   }
 
@@ -1893,11 +2390,12 @@ function bindGlobalNotesModalHandlers(){
     setState('view');
   }
 
-  // ensure starting state obeys visibility rules
-  toggleVisibility(saveBtn, false);
-  toggleVisibility(cancel, false);
-  toggleVisibility(editBtn, true);
-  saveBtn.disabled = true;
+	  // ensure starting state obeys visibility rules
+	  toggleVisibility(saveBtn, false);
+	  toggleVisibility(cancel, false);
+	  toggleVisibility(editBtn, true);
+	  refreshNotesFormRefs();
+	  saveBtn.disabled = true;
 
   editor.addEventListener('input', updateDirtyState);
 
@@ -1927,11 +2425,36 @@ function autoDismissFlashes(ms = 3000){
   });
 }
 
+function showClientFlash(message, category = 'info', duration = 3000){
+  let stack = document.querySelector('.flash-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.className = 'flash-stack';
+    stack.setAttribute('role','status');
+    stack.setAttribute('aria-live','polite');
+    document.body.appendChild(stack);
+  }
+  const item = document.createElement('div');
+  item.className = `flash ${category}`;
+  item.textContent = message;
+  stack.appendChild(item);
+
+  const removeNow = () => { item.classList.add('flash-fade'); setTimeout(()=> item.remove(), 350); };
+  item.addEventListener('click', removeNow, { once: true });
+  setTimeout(removeNow, duration);
+}
+
 const THEME_KEY = 'caseOrg.theme';
 function applyTheme(theme){
-  document.documentElement.setAttribute('data-theme', theme);
+  const root = document.documentElement;
+  const current = root.getAttribute('data-theme') || 'light';
+  if (current !== theme) {
+    if (theme === 'dark') root.setAttribute('data-theme', 'dark');
+    else root.removeAttribute('data-theme');
+  }
   const btn = document.getElementById('theme-toggle');
-  if (btn) {
+  if (btn && btn.dataset.iconTheme !== theme) {
+    btn.dataset.iconTheme = theme;
     btn.innerHTML = theme === 'dark'
       ? '<i class="fa-solid fa-sun"></i>'
       : '<i class="fa-solid fa-moon"></i>';
@@ -1944,8 +2467,8 @@ function initTheme(){
     applyTheme(saved);
     return;
   }
-  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  applyTheme(prefersDark ? 'dark' : 'light');
+  // Keep consistent with the inline <head> theme bootstrap (dark default unless user chose light).
+  applyTheme('dark');
 }
 
 function setupThemeToggle(){
@@ -1967,110 +2490,157 @@ function setupThemeToggle(){
 
 // -------------------- Startup wiring (single DOMContentLoaded) --------------------
 document.addEventListener('DOMContentLoaded', () => {
-  // Flashes auto-dismiss
   autoDismissFlashes(3000);
 
-  // Theme
+  // Theme (attribute is bootstrapped inline in <head>; this just syncs UI + listeners)
   initTheme();
   setupThemeToggle();
 
-  // Year dropdown in Advanced Search
-  initYearDropdown('year-dd', 'year', 2025);
+  // Topbar user dropdown menu
+  bindUserMenus();
 
-  // Simple search
-  const searchBtn = $('#search-btn');
-  const searchQ = $('#search-q');
-  searchBtn?.addEventListener('click', runBasicSearch);
-  searchQ?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') { e.preventDefault(); runBasicSearch(); }});
+  const tasks = [
+    // Year dropdown in Advanced Search
+    () => initYearDropdown('year-dd', 'year', 2025),
 
-  // Advanced toggle
-  const advToggle = $('#adv-toggle');
-  const advForm = $('#adv-form');
-  advToggle?.addEventListener('click', ()=>{
-    const isHidden = advForm.hidden;
-    advForm.hidden = !isHidden;
-    advToggle.setAttribute('aria-expanded', String(!isHidden));
-  });
+    // Simple search
+    () => {
+      const searchBtn = $('#search-btn');
+      const searchQ = $('#search-q');
+      searchBtn?.addEventListener('click', runBasicSearch);
+      searchQ?.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') { e.preventDefault(); runBasicSearch(); }});
+    },
 
-  // Advanced domain -> subcat
-  const advDom = $('#adv-domain');
-  const advSub = $('#adv-subcat');
-  advDom?.addEventListener('change', ()=>{
-    const dom = advDom.value || '';
-    if (dom && SUBCATS[dom]) {
-      populateOptions(advSub, SUBCATS[dom], "Subcategory");
-    } else if (advSub) {
-      advSub.innerHTML = '<option value="">Subcategory</option>';
-      advSub.disabled = true;
-    }
-  });
+    // Advanced toggle
+    () => {
+      const advToggle = $('#adv-toggle');
+      const advForm = $('#adv-form');
+      advToggle?.addEventListener('click', ()=>{
+        if (!advForm) return;
+        const isHidden = advForm.hidden;
+        advForm.hidden = !isHidden;
+        advToggle.setAttribute('aria-expanded', String(!isHidden));
+      });
+    },
 
-  // Advanced search run
-  const advSearch = $('#adv-search');
-  advSearch?.addEventListener('click', runAdvancedSearch);
-
-  // Directory search (if button exists)
-  const dirBtn = document.getElementById('dir-search');
-  if (dirBtn) {
-    dirBtn.setAttribute('aria-pressed', 'false');
-    dirBtn.addEventListener('click', async () => {
-      const results = document.getElementById('results');
-      if (!results) return;
-
-      if (!dirSearchState.active) {
-        dirSearchState.active = true;
-        dirSearchState.previousScroll = results.scrollTop || 0;
-        dirSearchState.currentPath = '';
-        dirBtn.classList.add('active');
-        dirBtn.textContent = 'Exit Directory Search';
-        dirBtn.setAttribute('aria-pressed', 'true');
-        results.innerHTML = '<div class="result-item">Loading directory tree...</div>';
-        await showDirLevel('');
-      } else {
-        dirSearchState.active = false;
-        dirSearchState.currentPath = '';
-        dirBtn.classList.remove('active');
-        dirBtn.textContent = 'Directory Search';
-        dirBtn.setAttribute('aria-pressed', 'false');
-        const snapshot = cloneResults(lastRenderedResults) || null;
-        if (Array.isArray(snapshot)) {
-          renderResults(snapshot);
-          const host = document.getElementById('results');
-          if (host) host.scrollTop = dirSearchState.previousScroll || 0;
+    // Advanced domain -> subcat
+    () => {
+      const advDom = $('#adv-domain');
+      const advSub = $('#adv-subcat');
+      advDom?.addEventListener('change', ()=>{
+        if (!advSub) return;
+        const dom = advDom.value || '';
+        if (dom && SUBCATS[dom]) {
+          populateOptions(advSub, SUBCATS[dom], "Subcategory");
         } else {
-          results.innerHTML = '<div class="result-item">Use the search tools above to view results.</div>';
+          advSub.innerHTML = '<option value="">Subcategory</option>';
+          advSub.disabled = true;
         }
-        dirSearchState.previousScroll = 0;
-      }
-    });
-  }
+      });
+    },
 
-  // Cards + forms
-  const cardConfigs = [
-    { el: $('#card-create'), handler: createCaseForm },
-    { el: $('#card-manage'), handler: manageCaseForm },
-    { el: $('#card-upload-case-law'), handler: caseLawUploadForm },
-    { el: $('#card-search-case-law'), handler: caseLawSearchForm },
+    // Advanced search run
+    () => {
+      const advSearch = $('#adv-search');
+      advSearch?.addEventListener('click', runAdvancedSearch);
+    },
+
+    // Directory search (if button exists)
+    () => {
+      const dirBtn = document.getElementById('dir-search');
+      if (!dirBtn) return;
+      dirBtn.setAttribute('aria-pressed', 'false');
+      dirBtn.addEventListener('click', async () => {
+        const results = document.getElementById('results');
+        if (!results) return;
+
+        if (!dirSearchState.active) {
+          dirSearchState.active = true;
+          dirSearchState.previousScroll = results.scrollTop || 0;
+          dirSearchState.currentPath = '';
+          dirBtn.classList.add('active');
+          dirBtn.textContent = 'Exit Directory Search';
+          dirBtn.setAttribute('aria-pressed', 'true');
+          results.innerHTML = '<div class="result-item">Loading directory tree...</div>';
+          await showDirLevel('');
+        } else {
+          dirSearchState.active = false;
+          dirSearchState.currentPath = '';
+          dirBtn.classList.remove('active');
+          dirBtn.textContent = 'Directory Search';
+          dirBtn.setAttribute('aria-pressed', 'false');
+          const snapshot = cloneResults(lastRenderedResults) || null;
+          if (Array.isArray(snapshot)) {
+            renderResults(snapshot);
+            const host = document.getElementById('results');
+            if (host) host.scrollTop = dirSearchState.previousScroll || 0;
+          } else {
+            results.innerHTML = '<div class="result-item">Use the search tools above to view results.</div>';
+          }
+          dirSearchState.previousScroll = 0;
+        }
+      });
+    },
+
+    // Cards + forms
+    () => {
+      const cardConfigs = [
+        { el: $('#card-create'), handler: createCaseForm },
+        { el: $('#card-manage'), handler: manageCaseForm },
+        { el: $('#card-upload-case-law'), handler: caseLawUploadForm },
+        { el: $('#card-search-case-law'), handler: caseLawSearchForm },
+      ];
+
+      const cardElements = cardConfigs.map(cfg => cfg.el).filter(Boolean);
+
+      cardConfigs.forEach(({ el, handler }) => {
+        if (!el || typeof handler !== 'function') return;
+        const others = cardElements.filter(other => other !== el);
+        const activate = () => {
+          setActive(el, others);
+          handler();
+        };
+        el.addEventListener('click', activate);
+        el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activate();
+          }
+        });
+      });
+    },
+
+    // Notes modal global handlers (Save/Cancel/Close)
+    () => bindGlobalNotesModalHandlers(),
   ];
 
-  const cardElements = cardConfigs.map(cfg => cfg.el).filter(Boolean);
+  const schedule = (fn) => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(fn, { timeout: 200 });
+      return;
+    }
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(fn);
+      return;
+    }
+    setTimeout(fn, 0);
+  };
 
-  cardConfigs.forEach(({ el, handler }) => {
-    if (!el || typeof handler !== 'function') return;
-    const others = cardElements.filter(other => other !== el);
-    const activate = () => {
-      setActive(el, others);
-      handler();
-    };
-    el.addEventListener('click', activate);
-    el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        activate();
-      }
-    });
-  });
+  const runNext = () => {
+    const task = tasks.shift();
+    if (!task) return;
+    try {
+      task();
+    } catch (err) {
+      console.warn('Init task failed', err);
+    }
+    schedule(runNext);
+  };
 
-  // Notes modal global handlers (Save/Cancel/Close)
-  bindGlobalNotesModalHandlers();
+  const kickOff = () => schedule(runNext);
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => requestAnimationFrame(kickOff));
+  } else {
+    kickOff();
+  }
 });
