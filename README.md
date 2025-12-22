@@ -47,7 +47,7 @@ It introduces secure email-based authentication, internal messaging, integrated 
   
 - Dark/light theme compatibility.
   
-![Dark/Light Mode Comparison](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Dark-Light-Comparison.png)
+![Dark Light Comparison](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/6ff68df9a6dc9505ce0906b14b0bf2394f2e13f0/static/img/Dark-Light-Comparison.png)
 
 - Clear disabled states and keyboard-focus polish.
 
