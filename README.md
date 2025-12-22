@@ -95,7 +95,7 @@ It introduces secure email-based authentication, internal messaging, integrated 
 - Asynchronous SMTP notifications prevent UI blocking.  
 - Optional performance logging for slower servers.
 
-![Messagin Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Messagin-Demo.png)
+![Messaging Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/51bdc11f04bb0f170bff08d7eed46b2b6f7cd680/static/img/Messagin-Demo.png)
 
 ### Search and Retrieval
 - Multi-filter search:
