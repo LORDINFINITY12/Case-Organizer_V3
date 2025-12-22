@@ -80,7 +80,7 @@ It introduces secure email-based authentication, internal messaging, integrated 
 - Asynchronous SMTP notifications prevent UI blocking.  
 - Optional performance logging for slower servers.
 
-![Messaging Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Messagin-Demo.png)
+![Messagin Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/705b09ef124bbb00f6c5a7d3c57838a5894daf9b/static/img/Messagin-Demo.png)
 
 ### Search and Retrieval
 - Multi-filter search:
