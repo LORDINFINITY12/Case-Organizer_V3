@@ -1,3 +1,33 @@
+case-organizer (3.5) unstable; urgency=medium
+
+  * Added PDF Editing Tools hub with tool landing page + individual tool pages.
+  * Merge PDF: allow adding PDFs across multiple file-picks/drag-drops, show a
+    removable file list, and support drag/drop ordering using first-page
+    thumbnails before merging.
+  * Rearrange PDF Pages: A4 thumbnail tiles with drag/drop ordering and preview
+    now updates to the reordered output PDF after applying changes.
+  * Replaced Sign PDF with Flatten PDF (qpdf-based annotation flattening).
+  * Added cancel workflow: Start button becomes Cancel once a job starts; Cancel
+    clears the UI and marks the job canceled server-side.
+  * Added ephemeral PDF job storage with auto-delete 5 minutes after completion
+    (UI shows remaining time).
+  * Rebuilt PDF compression with Rectal (lossless text-heavy) and Photon (lossy
+    image-heavy) modes plus explicit size delta messaging.
+  * Added Remove PDF Pages with range/odd/even/visual modes and post-apply
+    preview of the cleaned PDF.
+  * Added Page Numbers tool with range selection, position preview, and font
+    controls for size, family, and color.
+  * Added image-to-PDF conversion with thumbnail ordering and preview panel.
+  * Added OCR PDF with Tesseract language picker, DPI control, and binarize
+    option.
+  * OCR: show full language names, provide DPI presets (192/288/384), and use
+    adaptive binarization for cleaner scans; Debian dependencies updated for
+    Tesseract/PDF rendering.
+  * Fixed OCR language search filtering in the picker.
+  * Added an extra half-inch top margin to invoice PDFs for letterhead space.
+
+ -- Izumi <swarajswarupaggarwal@gmail.com>  Tue, 16 Dec 2025 03:35:00 +0530
+
 case-organizer (3.2) unstable; urgency=medium
 
   * Added a JSON "interpreter" view for Note.json, rendering structured case

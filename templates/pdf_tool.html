@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark">
+  <script>
+      (function () {
+          try {
+              const KEY = 'caseOrg.theme';
+              const saved = localStorage.getItem(KEY);
+              const wantsDark = saved ? (saved === 'dark')
+                  : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+              const defaultDark = true;
+              const useDark = saved ? (saved === 'dark') : defaultDark || wantsDark;
+              if (useDark) document.documentElement.setAttribute('data-theme', 'dark');
+          } catch (e) {}
+      })();
+  </script>
+  <title>Case Organizer – {{ tool.title }}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="{{ static_url('css/style.css') }}" />
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/Case_Organizer_logo.png') }}" />
+</head>
+<body data-role="{{ current_user.role if current_user else '' }}">
+  <div class="app-shell">
+    <header class="topbar">
+      <a href="{{ url_for('home') }}" class="brand">Case Organizer</a>
+      <div class="spacer"></div>
+      {% if current_user %}
+        <div class="user" data-user-menu>
+          <span class="user-menu-toggle"
+                role="button"
+                tabindex="0"
+                data-user-menu-toggle
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-label="Toggle account menu"
+                title="Account menu">
+            <span class="user-email-display">{{ current_user.email }}</span>
+            <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+          </span>
+          <div class="user-menu-panel" data-user-menu-panel role="menu" hidden>
+            <a href="{{ url_for('messages_home') }}" class="user-menu-item" role="menuitem">
+              <i class="fa-solid fa-envelope" aria-hidden="true"></i>
+              <span class="user-menu-label">Mail</span>
+              {% if unread_count %}
+                <span class="badge">{{ unread_count }}</span>
+              {% endif %}
+            </a>
+            <a href="{{ url_for('account') }}" class="user-menu-item" role="menuitem">
+              <i class="fa-solid fa-user" aria-hidden="true"></i>
+              <span class="user-menu-label">My Account</span>
+            </a>
+            <a href="{{ url_for('pdf_tools_home') }}" class="user-menu-item" role="menuitem">
+              <i class="fa-solid fa-file-pdf" aria-hidden="true"></i>
+              <span class="user-menu-label">PDF Editing Tools</span>
+            </a>
+            <a href="{{ url_for('invoice_form') }}" class="user-menu-item" role="menuitem">
+              <i class="fa-solid fa-file-invoice-dollar" aria-hidden="true"></i>
+              <span class="user-menu-label">Generate Invoice</span>
+            </a>
+            {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('admin_settings') }}" class="user-menu-item" role="menuitem">
+                <i class="fa-solid fa-gear" aria-hidden="true"></i>
+                <span class="user-menu-label">Settings</span>
+              </a>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+      {% if not current_user %}
+        <div class="user">Guest</div>
+      {% endif %}
+      <button id="theme-toggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <i class="fa-solid fa-moon"></i>
+      </button>
+      <a href="{{ url_for('logout') }}" class="logout" title="Logout">
+        <i class="fa-solid fa-right-from-bracket"></i>
+      </a>
+    </header>
+
+    <main class="home enter-animate">
+      {% include "_flash.html" %}
+
+      <section class="pdf-tool-page" aria-label="{{ tool.title }}">
+        <div class="pdf-tool-head">
+          <a class="btn-ghost pdf-tool-back" href="{{ url_for('pdf_tools_home') }}">
+            <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
+            Back to PDF tools
+          </a>
+          <h1>{{ tool.title }}</h1>
+          <p class="pdf-tool-subtitle">
+            Jobs auto-delete 5 minutes after completion.
+          </p>
+        </div>
+
+        <div
+          class="pdf-tool-shell"
+          data-pdf-tool
+          data-tool-id="{{ tool.id }}"
+          data-implemented="{{ '1' if tool.implemented else '0' }}"
+          data-start-url="{{ url_for('api_pdf_tools_start', tool_id=tool.id) }}"
+        >
+          {% if not tool.implemented %}
+            <div class="form-card">
+              <h2 class="section-title">Coming soon</h2>
+              <p class="form-help">This tool is planned, but not implemented yet.</p>
+            </div>
+          {% else %}
+            <div class="form-card pdf-tool-card">
+              <h2 class="section-title">Upload</h2>
+
+              <div class="dropzone pdf-dropzone" data-role="dropzone" tabindex="0" role="button">
+                <strong>Drop your file{{ 's' if tool.multiple else '' }} here</strong>
+                <div class="small">or click to choose</div>
+                <div class="small">Accepted: {{ tool.accept }}</div>
+              </div>
+              <input class="pdf-file-input" data-role="file" type="file" accept="{{ tool.accept }}" {{ 'multiple' if tool.multiple else '' }} hidden>
+              <div class="pdf-file-list" data-role="file-list"></div>
+              {% if tool.id == 'merge' %}
+                <div class="pdf-merge-count" data-role="merge-count"></div>
+              {% endif %}
+
+              {% if tool.id == 'reorder-pages' %}
+                <div class="pdf-reorder-wrap" data-role="reorder-wrap" hidden>
+                  <h2 class="section-title">Reorder</h2>
+                  <p class="form-help">
+                    Drag the page thumbnails to reorder. Click a thumbnail to preview that page.
+                  </p>
+                  <div class="pdf-reorder-layout">
+                    <div class="pdf-page-grid" data-role="page-grid"></div>
+                    <div class="form-actions">
+                      <button class="btn-primary" type="button" data-role="apply-order">Apply Order</button>
+                      <button class="btn-ghost" type="button" data-role="reset-order">Reset</button>
+                    </div>
+                    <div class="pdf-preview-panel">
+                      <div class="pdf-preview-label">Preview</div>
+                      <embed class="pdf-preview" data-role="pdf-preview" type="application/pdf" />
+                      <div class="form-help">
+                        Note: Reordering will invalidate existing digital signatures on the PDF.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              {% endif %}
+
+              {% if tool.id == 'merge' %}
+                <div class="pdf-merge-wrap" data-role="merge-wrap" hidden>
+                  <h2 class="section-title">Order</h2>
+                  <p class="form-help">
+                    Drag the document previews to set the merge order.
+                  </p>
+                  <div class="pdf-page-grid pdf-merge-grid" data-role="merge-grid"></div>
+                  <div class="form-actions">
+                    <button class="btn-primary" type="button" data-role="apply-merge">Merge PDFs</button>
+                    <button class="btn-ghost" type="button" data-role="reset-merge">Reset</button>
+                  </div>
+                </div>
+              {% endif %}
+
+              {% if tool.id == 'split' %}
+                <div class="pdf-split-wrap" data-role="split-wrap" hidden>
+                  <h2 class="section-title">Split</h2>
+                  <div class="pdf-split-controls">
+                    <div class="pdf-tool-field">
+                      <span>Split mode</span>
+                      <select data-role="split-mode">
+                        <option value="ranges" selected>Extract by page range</option>
+                        <option value="odd">Odd pages only</option>
+                        <option value="even">Even pages only</option>
+                        <option value="all">Split all pages</option>
+                        <option value="visual">Select pages visually</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="pdf-split-range" data-role="split-range-wrap">
+                    <div class="pdf-tool-field">
+                      <span>Page ranges</span>
+                      <input type="text" data-role="split-ranges" placeholder="e.g. 1-3, 5-7, 10-12">
+                      <div class="form-help">Each range becomes its own PDF (downloaded as a ZIP).</div>
+                      <div class="form-help pdf-split-error" data-role="split-range-error"></div>
+                    </div>
+                  </div>
+
+                  <div class="pdf-split-range-preview" data-role="split-range-preview" hidden>
+                    <p class="form-help">First page preview for each range.</p>
+                    <div class="pdf-page-grid pdf-range-grid" data-role="split-range-grid"></div>
+                  </div>
+
+                  <div class="pdf-split-visual" data-role="split-visual-wrap" hidden>
+                    <p class="form-help">Click pages to select or deselect them.</p>
+                    <div class="pdf-page-grid" data-role="split-visual-grid"></div>
+                    <div class="pdf-visual-count" data-role="split-visual-count"></div>
+                  </div>
+
+                  <div class="form-actions">
+                    <button class="btn-primary" type="button" data-role="apply-split">Split PDF</button>
+                    <button class="btn-ghost" type="button" data-role="reset-split">Reset</button>
+                  </div>
+                </div>
+              {% endif %}
+
+              {% if tool.id == 'remove-pages' %}
+                <div class="pdf-remove-wrap" data-role="remove-wrap" hidden>
+                  <h2 class="section-title">Remove Pages</h2>
+                  <div class="pdf-remove-controls">
+                    <div class="pdf-tool-field">
+                      <span>Remove mode</span>
+                      <select data-role="remove-mode">
+                        <option value="ranges" selected>Remove by page range</option>
+                        <option value="odd">Remove odd pages</option>
+                        <option value="even">Remove even pages</option>
+                        <option value="visual">Remove visually</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="pdf-remove-range" data-role="remove-range-wrap">
+                    <div class="pdf-tool-field">
+                      <span>Page ranges to remove</span>
+                      <input type="text" data-role="remove-ranges" placeholder="e.g. 1-3, 5-7, 10-12">
+                      <div class="form-help">Selected ranges will be deleted from the PDF.</div>
+                      <div class="form-help pdf-remove-error" data-role="remove-range-error"></div>
+                    </div>
+                  </div>
+
+                  <div class="pdf-remove-visual" data-role="remove-visual-wrap" hidden>
+                    <p class="form-help">Click pages to toggle removal (faded pages will be removed).</p>
+                    <div class="pdf-page-grid" data-role="remove-visual-grid"></div>
+                    <div class="pdf-visual-count" data-role="remove-visual-count"></div>
+                  </div>
+
+                  <div class="form-actions">
+                    <button class="btn-primary" type="button" data-role="apply-remove">Apply Changes</button>
+                    <button class="btn-ghost" type="button" data-role="reset-remove">Reset</button>
+                  </div>
+
+                  <div class="pdf-preview-panel">
+                    <div class="pdf-preview-label">Preview</div>
+                    <embed class="pdf-preview" data-role="remove-preview" type="application/pdf" />
+                  </div>
+                </div>
+              {% endif %}
+
+              {% if tool.id == 'page-numbers' %}
+                <div class="pdf-page-numbers-wrap" data-role="page-numbers-wrap" hidden>
+                  <h2 class="section-title">Page Numbers</h2>
+                  <div class="pdf-page-numbers-controls">
+                    <div class="pdf-tool-field">
+                      <span>Start page numbering from</span>
+                      <input type="number" min="1" data-role="page-numbers-start" placeholder="1">
+                    </div>
+                    <div class="pdf-tool-field">
+                      <span>End page numbering on</span>
+                      <input type="number" min="1" data-role="page-numbers-end" placeholder="Last page">
+                    </div>
+                    <div class="pdf-tool-field">
+                      <span>Font</span>
+                      <select data-role="page-numbers-font">
+                        <option value="Helvetica" selected>Helvetica</option>
+                        <option value="Helvetica-Bold">Helvetica Bold</option>
+                        <option value="Times-Roman">Times Roman</option>
+                        <option value="Times-Bold">Times Bold</option>
+                        <option value="Courier">Courier</option>
+                      </select>
+                    </div>
+                    <div class="pdf-tool-field">
+                      <span>Font size</span>
+                      <input type="number" min="6" max="72" value="12" data-role="page-numbers-size">
+                    </div>
+                    <div class="pdf-tool-field">
+                      <span>Font color</span>
+                      <input type="color" value="#111111" data-role="page-numbers-color">
+                    </div>
+                  </div>
+
+                  <div class="pdf-position-wrap">
+                    <span class="form-help">Position preview (click to select).</span>
+                    <div class="pdf-position-grid" data-role="page-numbers-position-grid">
+                      <button class="pdf-position-card pos-top-left" type="button" data-position="top-left" data-role="page-numbers-position">
+                        <div class="pdf-position-sample">
+                          <img class="pdf-position-thumb" alt="">
+                          <span class="pdf-position-num">1</span>
+                        </div>
+                        <span class="pdf-position-label">Top left</span>
+                      </button>
+                      <button class="pdf-position-card pos-top-center" type="button" data-position="top-center" data-role="page-numbers-position">
+                        <div class="pdf-position-sample">
+                          <img class="pdf-position-thumb" alt="">
+                          <span class="pdf-position-num">1</span>
+                        </div>
+                        <span class="pdf-position-label">Top middle</span>
+                      </button>
+                      <button class="pdf-position-card pos-top-right" type="button" data-position="top-right" data-role="page-numbers-position">
+                        <div class="pdf-position-sample">
+                          <img class="pdf-position-thumb" alt="">
+                          <span class="pdf-position-num">1</span>
+                        </div>
+                        <span class="pdf-position-label">Top right</span>
+                      </button>
+                      <button class="pdf-position-card pos-bottom-left" type="button" data-position="bottom-left" data-role="page-numbers-position">
+                        <div class="pdf-position-sample">
+                          <img class="pdf-position-thumb" alt="">
+                          <span class="pdf-position-num">1</span>
+                        </div>
+                        <span class="pdf-position-label">Bottom left</span>
+                      </button>
+                      <button class="pdf-position-card pos-bottom-center" type="button" data-position="bottom-center" data-role="page-numbers-position">
+                        <div class="pdf-position-sample">
+                          <img class="pdf-position-thumb" alt="">
+                          <span class="pdf-position-num">1</span>
+                        </div>
+                        <span class="pdf-position-label">Bottom middle</span>
+                      </button>
+                      <button class="pdf-position-card pos-bottom-right" type="button" data-position="bottom-right" data-role="page-numbers-position">
+                        <div class="pdf-position-sample">
+                          <img class="pdf-position-thumb" alt="">
+                          <span class="pdf-position-num">1</span>
+                        </div>
+                        <span class="pdf-position-label">Bottom right</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="form-help pdf-page-numbers-error" data-role="page-numbers-error"></div>
+                  <div class="form-actions">
+                    <button class="btn-primary" type="button" data-role="apply-page-numbers">Apply Page Numbers</button>
+                    <button class="btn-ghost" type="button" data-role="reset-page-numbers">Reset</button>
+                  </div>
+                </div>
+              {% endif %}
+
+              {% if tool.id == 'ocr' %}
+                <div class="pdf-ocr-wrap" data-role="ocr-wrap">
+                  <h2 class="section-title">OCR Settings</h2>
+                  {% if ocr_error %}
+                    <div class="form-help pdf-ocr-error">{{ ocr_error }}</div>
+                  {% else %}
+                    <div class="pdf-ocr-controls">
+                      <div class="pdf-tool-field">
+                        <span>Languages</span>
+                        <input type="text" data-role="ocr-search" placeholder="Search languages">
+                      </div>
+                      <div class="pdf-ocr-lang-list" data-role="ocr-lang-list">
+                        {% if ocr_languages %}
+                          {% for lang in ocr_languages %}
+                            <label class="pdf-ocr-lang-item" data-role="ocr-lang-item" data-lang="{{ lang.name }} {{ lang.code }}">
+                              <input type="checkbox" value="{{ lang.code }}" data-role="ocr-lang" {% if lang.code == 'eng' %}checked{% endif %}>
+                              <span class="pdf-ocr-lang-name">{{ lang.name }}</span>
+                              <span class="pdf-ocr-lang-code">{{ lang.code }}</span>
+                            </label>
+                          {% endfor %}
+                        {% else %}
+                          <div class="form-help pdf-ocr-error">No OCR languages found. Install Tesseract language packs.</div>
+                        {% endif %}
+                      </div>
+                    </div>
+
+                    <details class="pdf-ocr-advanced">
+                      <summary>Advanced settings</summary>
+                      <div class="pdf-ocr-advanced-grid">
+                        <div class="pdf-tool-field">
+                          <span>DPI</span>
+                          <select data-role="ocr-dpi">
+                            <option value="192">Standard (192 DPI)</option>
+                            <option value="288" selected>High (288 DPI)</option>
+                            <option value="384">Ultra (384 DPI)</option>
+                          </select>
+                          <div class="form-help">Higher DPI improves accuracy but increases file size.</div>
+                        </div>
+                        <label class="pdf-ocr-toggle">
+                          <input type="checkbox" data-role="ocr-binarize">
+                          <span>Binarize and boost contrast</span>
+                        </label>
+                      </div>
+                    </details>
+                    <div class="form-help pdf-ocr-error" data-role="ocr-error"></div>
+                  {% endif %}
+                </div>
+              {% endif %}
+
+              {% if tool.id == 'jpeg-to-pdf' %}
+                <div class="pdf-image-wrap" data-role="image-wrap" hidden>
+                  <h2 class="section-title">Arrange Images</h2>
+                  <p class="form-help">
+                    Drag the image thumbnails to set page order. Click a thumbnail to preview that page.
+                  </p>
+                  <div class="pdf-reorder-layout">
+                    <div class="pdf-page-grid" data-role="image-grid"></div>
+                    <div class="form-actions">
+                      <button class="btn-primary" type="button" data-role="apply-image-order">Apply Order</button>
+                      <button class="btn-ghost" type="button" data-role="reset-image-order">Reset</button>
+                    </div>
+                    <div class="pdf-preview-panel">
+                      <div class="pdf-preview-label">Preview</div>
+                      <embed class="pdf-preview" data-role="image-preview" />
+                    </div>
+                  </div>
+                </div>
+              {% endif %}
+
+              {% if tool.id == 'compress' %}
+                <div class="pdf-compress-wrap">
+                  <h2 class="section-title">Compression</h2>
+                  <div class="pdf-tool-field">
+                    <span>Compression method</span>
+                    <select data-role="compress-method">
+                      <option value="rectal">Rectal (text-heavy, lossless)</option>
+                      <option value="photon" selected>Photon (image-based, lossy)</option>
+                    </select>
+                    <div class="form-help">Rectal keeps text sharp; Photon shrinks image-heavy PDFs more aggressively.</div>
+                  </div>
+                  <div class="pdf-tool-field">
+                    <span>Compression level</span>
+                    <select data-role="compress-level">
+                      <option value="low">Low compression</option>
+                      <option value="medium" selected>Medium compression</option>
+                      <option value="high">High compression</option>
+                    </select>
+                    <div class="form-help">Medium is a balanced default for quality and size.</div>
+                  </div>
+                </div>
+              {% endif %}
+
+              <div class="form-actions form-actions-right">
+                <button class="btn-primary" type="button" data-role="start">
+                  <i class="fa-solid fa-play" aria-hidden="true"></i>
+                  Start
+                </button>
+              </div>
+            </div>
+
+            <div class="form-card pdf-tool-status" data-role="status-card" hidden>
+              <h2 class="section-title">Progress</h2>
+              <div class="pdf-progress">
+                <div class="pdf-progress-bar" data-role="progress-bar" style="width: 0%"></div>
+              </div>
+              <div class="pdf-progress-meta">
+                <span data-role="status-text">Waiting…</span>
+                <span data-role="expires-text"></span>
+              </div>
+              <div class="form-actions">
+                <a class="btn-primary" data-role="download" href="#" hidden>
+                  <i class="fa-solid fa-file-arrow-down" aria-hidden="true"></i>
+                  Download
+                </a>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.CaseOrg = Object.assign(window.CaseOrg || {}, {
+      isAdmin: {{ (current_user and current_user.role == 'admin') | tojson }}
+    });
+  </script>
+  <script src="{{ static_url('js/main.js') }}"></script>
+  <script src="{{ static_url('js/pdf_tools.js') }}"></script>
+</body>
+</html>
