@@ -93,13 +93,6 @@ It introduces secure email-based authentication, internal messaging, integrated 
 ![Case Law Search Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Case-Law-Search-Demo.png)
 
 ### UI and UX
-- PDF editing hub with PDF24-style workflow: drag/drop uploads, per-tool options,
-  progress tracking, and one-click downloads.
-- Tools included: Merge, Split (ranges/odd-even/visual), Compress (Rectal/Photon),
-  Remove Pages, Rearrange Pages with thumbnails, Flatten PDFs, OCR with language
-  picker + DPI presets, Add Page Numbers, and Image-to-PDF with ordering/preview.
-- Jobs auto-delete 5 minutes after completion; Start toggles to Cancel to clear
-  selections and reset the tool state.
 - Flattened, consistent styling across all pages.
 
 ![Index Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Index-Demo.png)
@@ -113,6 +106,15 @@ It introduces secure email-based authentication, internal messaging, integrated 
 ![Dark/Light Mode Comparison](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Dark-Light-Comparison.png)
 
 - Clear disabled states and keyboard-focus polish.
+
+### PDF Editing Suite
+- PDF editing hub with PDF24-style workflow: drag/drop uploads, per-tool options,
+  progress tracking, and one-click downloads.
+- Tools included: Merge, Split (ranges/odd-even/visual), Compress (Rectal/Photon),
+  Remove Pages, Rearrange Pages with thumbnails, Flatten PDFs, OCR with language
+  picker + DPI presets, Add Page Numbers, and Image-to-PDF with ordering/preview.
+- Jobs auto-delete 5 minutes after completion; Start toggles to Cancel to clear
+  selections and reset the tool state.
 
 ---
 
