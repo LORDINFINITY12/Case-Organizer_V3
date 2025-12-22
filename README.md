@@ -90,7 +90,7 @@ It introduces secure email-based authentication, internal messaging, integrated 
   - Free-text queries  
 - Fast indexed search across Notes, Case Law, and Invoices.
 
-![Case Law Search Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Case-Law-Search-Demo.png)
+![Case Law Search Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/8a11d3d986b5f2005c320382e29d456b4290527a/static/img/Case-Law-Search-Demo.png)
 
 ### UI and UX
 - Flattened, consistent styling across all pages.
