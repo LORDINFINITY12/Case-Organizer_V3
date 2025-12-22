@@ -88,7 +88,7 @@ It introduces secure email-based authentication, internal messaging, integrated 
 - Dual save: global `Invoices/` archive and per-case folder.  
 - Context-aware UI disables irrelevant controls until a case is selected.
 
-![Invoice Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Invoice-Demo.png)
+![Invoice Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/4a578a2495b1cf28401fe3ca64c637b04afa63bf/static/img/Invoice-Demo.png)
 
 ### Internal Messaging
 - Built-in mailbox for users to send, receive, and read messages.  
@@ -169,10 +169,10 @@ http://localhost:5000
 
 ```bash
 # Download the latest release
-wget https://github.com/LORDINFINITY12/case-organizer-v3/releases/download/v3.1.2/case-organizer_3.1.2_amd64.deb
+wget https://github.com/LORDINFINITY12/case-organizer-v3/releases/download/v3.5/case-organizer_3.5_all.deb
 
 # Install the package
-sudo dpkg -i case-organizer_3.1.2_amd64.deb
+sudo dpkg -i case-organizer_3.5_all.deb
 
 # Enable and start the service
 sudo systemctl enable --now case-organizer.service
