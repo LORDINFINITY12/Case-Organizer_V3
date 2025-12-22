@@ -93,6 +93,13 @@ It introduces secure email-based authentication, internal messaging, integrated 
 ![Case Law Search Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Case-Law-Search-Demo.png)
 
 ### UI and UX
+- PDF editing hub with PDF24-style workflow: drag/drop uploads, per-tool options,
+  progress tracking, and one-click downloads.
+- Tools included: Merge, Split (ranges/odd-even/visual), Compress (Rectal/Photon),
+  Remove Pages, Rearrange Pages with thumbnails, Flatten PDFs, OCR with language
+  picker + DPI presets, Add Page Numbers, and Image-to-PDF with ordering/preview.
+- Jobs auto-delete 5 minutes after completion; Start toggles to Cancel to clear
+  selections and reset the tool state.
 - Flattened, consistent styling across all pages.
 
 ![Index Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Index-Demo.png)
@@ -119,9 +126,17 @@ python-docx>=1.1.0
 argon2-cffi>=23.1.0
 cryptography>=41.0.0
 reportlab>=3.6.12
+pypdf>=4.0.0
+Pillow>=10.0.0
 ```
 
 Python 3.10 or newer is required.
+
+System packages for PDF tooling (recommended):
+- `tesseract-ocr` (+ language packs such as `tesseract-ocr-all`)
+- `poppler-utils` (for `pdftoppm` thumbnails/OCR rendering)
+- `qpdf` (flattening + Rectal compression)
+- `ghostscript` (Photon compression)
 
 ---
 
