@@ -95,7 +95,7 @@ It introduces secure email-based authentication, internal messaging, integrated 
 ### UI and UX
 - Flattened, consistent styling across all pages.
 
-![Index Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Index-Demo.png)
+![Index Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/e9e69d7d98da50c88731a42746efd6f648f325e9/static/img/Index-Demo.png)
 
 - Password-visibility toggle on login form.
 
