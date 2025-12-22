@@ -116,7 +116,7 @@ It introduces secure email-based authentication, internal messaging, integrated 
 - Jobs auto-delete 5 minutes after completion; Start toggles to Cancel to clear
   selections and reset the tool state.
 
-  ![PDF Editing Tools](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/068fed0c0ef5e6b84fd5ef98e2d17d691a5f873c/static/img/PDF-Editing-Tools.png)
+![PDF Editing Tools](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/068fed0c0ef5e6b84fd5ef98e2d17d691a5f873c/static/img/PDF-Editing-Tools.png)
 
 
 ---
