@@ -17,13 +17,13 @@
           } catch (e) {}
       })();
   </script>
-  <title>Case Organizer – My Account</title>
+  <title>Case Organizer – PDF Editing Tools</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
   <link rel="stylesheet" href="{{ static_url('css/style.css') }}" />
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/Case_Organizer_logo.png') }}" />
 </head>
-<body>
+<body data-role="{{ current_user.role if current_user else '' }}">
   <div class="app-shell">
     <header class="topbar">
       <a href="{{ url_for('home') }}" class="brand">Case Organizer</a>
@@ -49,11 +49,11 @@
                 <span class="badge">{{ unread_count }}</span>
               {% endif %}
             </a>
-            <a href="{{ url_for('account') }}" class="user-menu-item" role="menuitem" aria-current="page">
+            <a href="{{ url_for('account') }}" class="user-menu-item" role="menuitem">
               <i class="fa-solid fa-user" aria-hidden="true"></i>
               <span class="user-menu-label">My Account</span>
             </a>
-            <a href="{{ url_for('pdf_tools_home') }}" class="user-menu-item" role="menuitem">
+            <a href="{{ url_for('pdf_tools_home') }}" class="user-menu-item" role="menuitem" aria-current="page">
               <i class="fa-solid fa-file-pdf" aria-hidden="true"></i>
               <span class="user-menu-label">PDF Editing Tools</span>
             </a>
@@ -84,47 +84,39 @@
     <main class="home enter-animate">
       {% include "_flash.html" %}
 
-      <h1>My Account</h1>
-      <div class="settings-grid">
-        <div class="settings-card">
-          <h2>Update Email</h2>
-          <form method="post">
-            <input type="hidden" name="form_name" value="update_email">
-            <label for="new_email">Email</label>
-            <input id="new_email" name="new_email" type="email" value="{{ current_user.email }}" required>
-
-            <label for="current_password_email">Current password</label>
-            <input id="current_password_email" name="current_password" type="password" placeholder="Required" required>
-
-            <button type="submit" class="btn-primary">Save Email</button>
-          </form>
+      <section class="pdf-tools-page" aria-label="PDF editing tools">
+        <div class="pdf-tools-head">
+          <h1>PDF Editing Tools</h1>
+          <p class="pdf-tools-subtitle">
+            Upload, edit, and download. All jobs auto-delete 5 minutes after completion.
+          </p>
         </div>
 
-        <div class="settings-card">
-          <h2>Change Password</h2>
-          <form method="post">
-            <input type="hidden" name="form_name" value="update_password">
-            <label for="current_password">Current password</label>
-            <input id="current_password" name="current_password" type="password" placeholder="Current password" required>
-
-            <label for="new_password">New password</label>
-            <input id="new_password" name="new_password" type="password" placeholder="Minimum 8 characters" required>
-
-            <label for="confirm_password">Confirm password</label>
-            <input id="confirm_password" name="confirm_password" type="password" placeholder="Repeat new password" required>
-
-            <button type="submit" class="btn-secondary">Update Password</button>
-          </form>
-        </div>
-      </div>
+        <section class="cards-grid pdf-tools-grid" aria-label="PDF Tools">
+          {% for tool in tools %}
+            <a
+              class="card big pdf-tool-card {{ 'is-disabled' if not tool.implemented else '' }}"
+              href="{{ url_for('pdf_tool_page', tool_id=tool.id) }}"
+              aria-label="{{ tool.title }}"
+            >
+              <div class="icon"><i class="fa-solid {{ tool.icon }}"></i></div>
+              <div class="label">{{ tool.title }}</div>
+              {% if not tool.implemented %}
+                <div class="pdf-tool-badge" aria-hidden="true">Coming soon</div>
+              {% endif %}
+            </a>
+          {% endfor %}
+        </section>
+      </section>
     </main>
   </div>
 
   <script>
     window.CaseOrg = Object.assign(window.CaseOrg || {}, {
-      isAdmin: {{ 'true' if current_user and current_user.role == 'admin' else 'false' }}
+      isAdmin: {{ (current_user and current_user.role == 'admin') | tojson }}
     });
   </script>
   <script src="{{ static_url('js/main.js') }}"></script>
 </body>
 </html>
+

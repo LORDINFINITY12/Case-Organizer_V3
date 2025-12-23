@@ -32,11 +32,29 @@ It introduces secure email-based authentication, internal messaging, integrated 
   - Promote or demote roles between *admin* and *standard*.  
   - Edit or delete user accounts.  
   - Update or relocate the root storage path live.  
-  - Delete server files directly from the dashboard.  
+  - Delete server files directly from the dashboard.
+
+![Admin Account Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Admin-Account-Demo.png)
+
+### UI and UX
+- Flattened, consistent styling across all pages.
+
+![Index Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Index-Demo.png)
+
+- Password-visibility toggle on login form.
+
+![Login Screen Visibility Toggle](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Login-Screen-Visibility-Toggle.png)
+  
+- Dark/light theme compatibility.
+  
+![Dark Light Comparison](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/6ff68df9a6dc9505ce0906b14b0bf2394f2e13f0/static/img/Dark-Light-Comparison.png)
+
+- Clear disabled states and keyboard-focus polish.
 
 ### Case Management
 - Create, edit, and organize structured case directories:
-  ```none
+
+   ```none
   fs-files/
     YYYY/
       MMM/
@@ -70,10 +88,14 @@ It introduces secure email-based authentication, internal messaging, integrated 
 - Dual save: global `Invoices/` archive and per-case folder.  
 - Context-aware UI disables irrelevant controls until a case is selected.
 
+![Invoice Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/4a578a2495b1cf28401fe3ca64c637b04afa63bf/static/img/Invoice-Demo.png)
+
 ### Internal Messaging
 - Built-in mailbox for users to send, receive, and read messages.  
 - Asynchronous SMTP notifications prevent UI blocking.  
 - Optional performance logging for slower servers.
+
+![Messaging Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/51bdc11f04bb0f170bff08d7eed46b2b6f7cd680/static/img/Messagin-Demo.png)
 
 ### Search and Retrieval
 - Multi-filter search:
@@ -83,11 +105,18 @@ It introduces secure email-based authentication, internal messaging, integrated 
   - Free-text queries  
 - Fast indexed search across Notes, Case Law, and Invoices.
 
-### UI and UX
-- Flattened, consistent styling across all pages.  
-- Password-visibility toggle on login form.  
-- Dark/light theme compatibility.  
-- Clear disabled states and keyboard-focus polish.
+![Case Law Search Demo](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/Case-Law-Search-Demo.png)
+
+### PDF Editing Suite
+- PDF editing hub with PDF24-style workflow: drag/drop uploads, per-tool options,
+  progress tracking, and one-click downloads.
+- Tools included: Merge, Split (ranges/odd-even/visual), Compress (Rectal/Photon),
+  Remove Pages, Rearrange Pages with thumbnails, Flatten PDFs, OCR with language
+  picker + DPI presets, Add Page Numbers, and Image-to-PDF with ordering/preview.
+- Jobs auto-delete 5 minutes after completion; Start toggles to Cancel to clear
+  selections and reset the tool state.
+
+![PDF Editing Tools](https://raw.githubusercontent.com/LORDINFINITY12/Case-Organizer_V3/main/static/img/PDF-Editing-Tools.png)
 
 ---
 
@@ -101,9 +130,17 @@ python-docx>=1.1.0
 argon2-cffi>=23.1.0
 cryptography>=41.0.0
 reportlab>=3.6.12
+pypdf>=4.0.0
+Pillow>=10.0.0
 ```
 
 Python 3.10 or newer is required.
+
+System packages for PDF tooling (recommended):
+- `tesseract-ocr` (+ language packs such as `tesseract-ocr-all`)
+- `poppler-utils` (for `pdftoppm` thumbnails/OCR rendering)
+- `qpdf` (flattening + Rectal compression)
+- `ghostscript` (Photon compression)
 
 ---
 
@@ -117,7 +154,7 @@ cd case-organizer-v3
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python app.py
+python3 app.py
 ```
 
 Access the app at:
@@ -132,10 +169,10 @@ http://localhost:5000
 
 ```bash
 # Download the latest release
-wget https://github.com/<your-org>/case-organizer-v3/releases/download/v3.X/case-organizer_3.X_amd64.deb
+wget https://github.com/LORDINFINITY12/case-organizer-v3/releases/download/v3.5/case-organizer_3.5_all.deb
 
 # Install the package
-sudo dpkg -i case-organizer_3.X_amd64.deb
+sudo dpkg -i case-organizer_3.5_all.deb
 
 # Enable and start the service
 sudo systemctl enable --now case-organizer.service
@@ -174,5 +211,5 @@ journalctl -u case-organizer.service
 
 ---
 
-**License:** MIT / Open Source  
-**Current Release:** v3.1.2 (October 2025)
+**License:** Personal Use License (see LICENSE for details)  
+**Current Release:** v3.5 (December 2025)

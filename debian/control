@@ -15,9 +15,14 @@ Depends:
   python3-docx,
   python3-argon2,
   python3-cryptography,
+  python3-pil,
+  tesseract-ocr,
+  poppler-utils,
   postfix | mail-transport-agent,
   adduser,
   ${misc:Depends}
+Recommends:
+  tesseract-ocr-all
 Description: Lightweight Flask-based case file organizer with systemd service
  Case Organizer organizes legal case files into a structured hierarchy,
  supports uploads, search, and metadata. Ships with a systemd unit and

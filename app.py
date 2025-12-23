@@ -5,7 +5,7 @@ import re
 import sqlite3
 import shutil
 import secrets
-from concurrent.futures import TimeoutError as FutureTimeout
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from contextlib import contextmanager, suppress
@@ -18,12 +18,13 @@ from typing import Dict, Any, Iterable, Optional
 
 from flask import (
     Flask, request, jsonify, session, redirect, url_for,
-    render_template, render_template_string, flash, send_file, g
+    render_template, render_template_string, flash, send_file, g, abort
 )
 from werkzeug.utils import secure_filename
 
 from services.db import get_app_db, close_app_db
 from services.settings import settings_manager
+from services import pdf_jobs, pdf_tools
 from services.users import (
     create_user,
     count_users,
@@ -119,12 +120,13 @@ def generate_invoice_pdf(invoice: Dict[str, Any]) -> tuple[BytesIO, str]:
         ) from exc
 
     pdf_buffer = BytesIO()
+    letterhead_margin = 12.7 * mm  # extra half-inch for printed letterhead
     doc = SimpleDocTemplate(
         pdf_buffer,
         pagesize=A4,
         leftMargin=18 * mm,
         rightMargin=18 * mm,
-        topMargin=24 * mm,
+        topMargin=(24 * mm) + letterhead_margin,
         bottomMargin=20 * mm,
         title=f"Invoice {invoice.get('invoice_number') or ''}".strip() or "Invoice",
     )
@@ -742,12 +744,25 @@ def require_admin_api(handler):
 # ---- Flask setup --------------------------------------------------------
 SLOW_REQ_THRESHOLD_MS = float(os.environ.get("CASEORG_SLOW_MS", "250") or "250")
 STATIC_MAX_AGE = int(os.environ.get("CASEORG_STATIC_MAX_AGE", "86400") or "86400")
+PDF_THUMB_MAX_PAGES = int(os.environ.get("CASEORG_PDF_THUMB_MAX_PAGES", "200") or "200")
+PDF_THUMB_MAX_DIM_PX = int(
+    os.environ.get(
+        "CASEORG_PDF_THUMB_MAX_DIM",
+        os.environ.get("CASEORG_PDF_THUMB_WIDTH", "520"),
+    )
+    or "520"
+)
 
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 app.permanent_session_lifetime = SESSION_TIMEOUT
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = STATIC_MAX_AGE
+
+PDF_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="caseorg-pdf")
+
+_PDF_JOB_CLEANUP_TTL_SECONDS = 30.0
+_PDF_JOB_CLEANUP_LAST_RUN_AT = 0.0
 
 print("Running app.py from:", os.path.abspath(__file__))
 print("FS_ROOT:", FS_ROOT)
@@ -979,6 +994,19 @@ def _load_current_user() -> None:
         g.unread_count = count_unread(user['id'])
     else:
         session.clear()
+
+
+@app.before_request
+def _cleanup_expired_pdf_jobs() -> None:
+    if _is_static_request():
+        return
+    global _PDF_JOB_CLEANUP_LAST_RUN_AT
+    now = time.monotonic()
+    if (now - _PDF_JOB_CLEANUP_LAST_RUN_AT) < _PDF_JOB_CLEANUP_TTL_SECONDS:
+        return
+    _PDF_JOB_CLEANUP_LAST_RUN_AT = now
+    with suppress(Exception):
+        pdf_jobs.cleanup_expired_jobs()
 
 
 @app.teardown_appcontext
@@ -3319,6 +3347,1674 @@ def api_note(year, month, case_name):
     except Exception as e:
         return jsonify({"ok": False, "msg": f"Write failed: {e}"}), 500
 
+
+
+# ---- PDF Tools -----------------------------------------------------------
+
+PDF_TOOL_CATALOG: list[dict[str, Any]] = [
+    {"id": "merge", "title": "Merge PDF", "icon": "fa-object-group", "accept": ".pdf", "multiple": True, "implemented": True},
+    {"id": "split", "title": "Split PDF", "icon": "fa-scissors", "accept": ".pdf", "multiple": False, "implemented": True},
+    {"id": "compress", "title": "Compress PDF", "icon": "fa-file-zipper", "accept": ".pdf", "multiple": False, "implemented": True},
+    {"id": "remove-pages", "title": "Remove PDF Pages", "icon": "fa-trash-can", "accept": ".pdf", "multiple": False, "implemented": True},
+    {"id": "reorder-pages", "title": "Rearrange PDF Pages", "icon": "fa-grip", "accept": ".pdf", "multiple": False, "implemented": True},
+    {"id": "ocr", "title": "OCR PDF", "icon": "fa-eye", "accept": ".pdf", "multiple": False, "implemented": True},
+    {"id": "page-numbers", "title": "Add Page Numbers", "icon": "fa-list-ol", "accept": ".pdf", "multiple": False, "implemented": True},
+    {"id": "jpeg-to-pdf", "title": "JPEG to PDF", "icon": "fa-file-image", "accept": "image/*", "multiple": True, "implemented": True},
+    {"id": "flatten", "title": "Flatten PDF", "icon": "fa-layer-group", "accept": ".pdf", "multiple": False, "implemented": True},
+]
+
+
+def _pdf_tool_by_id(tool_id: str) -> dict[str, Any]:
+    for tool in PDF_TOOL_CATALOG:
+        if tool["id"] == tool_id:
+            return tool
+    abort(404)
+
+
+@app.get("/pdf-tools")
+@require_login
+def pdf_tools_home():
+    return render_template("pdf_tools.html", tools=PDF_TOOL_CATALOG)
+
+
+@app.get("/pdf-tools/<tool_id>")
+@require_login
+def pdf_tool_page(tool_id: str):
+    tool = _pdf_tool_by_id(tool_id)
+    ocr_languages: list[str] = []
+    ocr_error: str | None = None
+    if tool_id == "ocr":
+        try:
+            ocr_languages = pdf_tools.tesseract_languages()
+        except Exception as exc:
+            ocr_error = str(exc) or "Unable to load OCR languages."
+    return render_template("pdf_tool.html", tool=tool, ocr_languages=ocr_languages, ocr_error=ocr_error)
+
+
+def _current_user_id() -> int:
+    user = g.get("current_user")
+    if not user:
+        raise RuntimeError("Authentication required.")
+    return int(user["id"])
+
+
+@app.post("/api/pdf-tools/<tool_id>/start")
+@require_login_api
+def api_pdf_tools_start(tool_id: str):
+    tool = _pdf_tool_by_id(tool_id)
+    if not tool.get("implemented"):
+        return jsonify({"ok": False, "msg": "This tool is not implemented yet."}), 501
+
+    owner_user_id = _current_user_id()
+    job_id = pdf_jobs.create_job(tool=tool_id, owner_user_id=owner_user_id)
+    paths = pdf_jobs.build_job_paths(job_id)
+
+    def bad_request(msg: str):
+        with suppress(Exception):
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+            pdf_jobs.mark_job_completed(job_id)
+        return jsonify({"ok": False, "msg": msg}), 400
+
+    if tool_id == "merge":
+        uploads = request.files.getlist("file")
+        if len(uploads) < 2:
+            return bad_request("Select at least two PDF files to merge.")
+
+        input_paths: list[Path] = []
+        merge_files: list[dict[str, Any]] = []
+        for upload in uploads:
+            if not upload or not upload.filename:
+                continue
+            if not (upload.filename or "").lower().endswith(".pdf"):
+                continue
+            file_idx = len(input_paths) + 1
+            original_name = upload.filename
+            safe_name = secure_filename(original_name) or f"document_{file_idx}.pdf"
+            dest = paths.input_dir / f"{file_idx:02d}_{safe_name}"
+            upload.save(dest)
+            input_paths.append(dest)
+            merge_files.append({"idx": file_idx, "name": original_name, "stored": dest.name})
+
+        if len(input_paths) < 2:
+            return bad_request("No valid PDF files were uploaded.")
+
+        thumbs_dir = paths.input_dir / "merge_thumbs"
+        with suppress(Exception):
+            shutil.rmtree(thumbs_dir, ignore_errors=True)
+        thumbs_dir.mkdir(parents=True, exist_ok=True)
+
+        pdf_jobs.update_job_meta(
+            job_id,
+            merge_files=merge_files,
+            merge_file_count=len(merge_files),
+            thumbs_ready=False,
+        )
+        pdf_jobs.set_job_status(
+            job_id,
+            state="processing",
+            percent=1,
+            stage="thumbnails",
+            message="Generating document previews…",
+        )
+
+        def _task_merge_thumbnails():
+            try:
+                total = len(input_paths)
+                for idx, pdf_path in enumerate(input_paths, start=1):
+                    pct = int((idx / total) * 99)
+                    pct = max(1, min(99, pct))
+                    pdf_jobs.set_job_status(
+                        job_id,
+                        state="processing",
+                        percent=pct,
+                        stage="thumbnails",
+                        message=f"Generating document previews… ({idx}/{total})",
+                    )
+                    out_png = thumbs_dir / f"file-{idx:02d}.png"
+                    pdf_tools.generate_pdf_first_page_thumbnail(
+                        input_pdf=pdf_path,
+                        output_png=out_png,
+                        max_dim_px=PDF_THUMB_MAX_DIM_PX,
+                    )
+
+                pdf_jobs.update_job_meta(job_id, thumbs_ready=True)
+                pdf_jobs.set_job_status(
+                    job_id,
+                    state="awaiting_order",
+                    percent=0,
+                    stage="awaiting_order",
+                    message="Reorder documents and click Merge.",
+                )
+            except Exception as exc:
+                msg = str(exc) or "Failed to generate document previews."
+                pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+
+                pdf_jobs.mark_job_completed(job_id)
+
+        PDF_TOOL_EXECUTOR.submit(_task_merge_thumbnails)
+        return jsonify({"ok": True, "job_id": job_id, "file_count": len(merge_files)})
+
+    if tool_id == "split":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return bad_request("Select a PDF file to split.")
+        if not (upload.filename or "").lower().endswith(".pdf"):
+            return bad_request("Only PDF files are supported for splitting.")
+
+        input_pdf = paths.input_dir / "input.pdf"
+        upload.save(input_pdf)
+
+        try:
+            page_count = pdf_tools.count_pdf_pages(input_pdf)
+        except Exception as exc:
+            return bad_request(str(exc) or "Unable to read the PDF.")
+
+        pdf_jobs.update_job_meta(job_id, page_count=page_count, thumbs_ready=False)
+        pdf_jobs.set_job_status(
+            job_id,
+            state="awaiting_split",
+            percent=0,
+            stage="awaiting_split",
+            message="Ready to split.",
+        )
+        return jsonify({"ok": True, "job_id": job_id, "page_count": page_count})
+
+    if tool_id == "remove-pages":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return bad_request("Select a PDF file to edit.")
+        if not (upload.filename or "").lower().endswith(".pdf"):
+            return bad_request("Only PDF files are supported for page removal.")
+
+        input_pdf = paths.input_dir / "input.pdf"
+        upload.save(input_pdf)
+
+        try:
+            page_count = pdf_tools.count_pdf_pages(input_pdf)
+        except Exception as exc:
+            return bad_request(str(exc) or "Unable to read the PDF.")
+
+        pdf_jobs.update_job_meta(job_id, page_count=page_count, thumbs_ready=False)
+        pdf_jobs.set_job_status(
+            job_id,
+            state="awaiting_remove",
+            percent=0,
+            stage="awaiting_remove",
+            message="Ready to remove pages.",
+        )
+        return jsonify({"ok": True, "job_id": job_id, "page_count": page_count})
+
+    if tool_id == "page-numbers":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return bad_request("Select a PDF file to edit.")
+        if not (upload.filename or "").lower().endswith(".pdf"):
+            return bad_request("Only PDF files are supported for page numbering.")
+
+        input_pdf = paths.input_dir / "input.pdf"
+        upload.save(input_pdf)
+
+        try:
+            page_count = pdf_tools.count_pdf_pages(input_pdf)
+        except Exception as exc:
+            return bad_request(str(exc) or "Unable to read the PDF.")
+
+        pdf_jobs.update_job_meta(job_id, page_count=page_count)
+        pdf_jobs.set_job_status(
+            job_id,
+            state="awaiting_numbers",
+            percent=0,
+            stage="awaiting_numbers",
+            message="Ready to add page numbers.",
+        )
+        return jsonify({"ok": True, "job_id": job_id, "page_count": page_count})
+
+    if tool_id == "ocr":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return bad_request("Select a PDF file to OCR.")
+        if not (upload.filename or "").lower().endswith(".pdf"):
+            return bad_request("Only PDF files are supported for OCR.")
+
+        input_pdf = paths.input_dir / "input.pdf"
+        upload.save(input_pdf)
+
+        try:
+            page_count = pdf_tools.count_pdf_pages(input_pdf)
+        except Exception as exc:
+            return bad_request(str(exc) or "Unable to read the PDF.")
+
+        try:
+            available_languages = pdf_tools.tesseract_languages()
+        except Exception as exc:
+            return bad_request(str(exc) or "OCR is not available.")
+
+        available_codes = {
+            lang.get("code")
+            for lang in available_languages
+            if isinstance(lang, dict) and lang.get("code")
+        }
+
+        selected_languages = [str(lang).strip() for lang in request.form.getlist("ocr_language") if str(lang).strip()]
+        if not selected_languages:
+            if "eng" in available_codes:
+                selected_languages = ["eng"]
+            else:
+                return bad_request("Select at least one OCR language.")
+
+        invalid = [lang for lang in selected_languages if lang not in available_codes]
+        if invalid:
+            return bad_request(f"Unsupported OCR language(s): {', '.join(invalid)}.")
+
+        dpi_raw = request.form.get("ocr_dpi") or "300"
+        try:
+            dpi = int(dpi_raw)
+        except (TypeError, ValueError):
+            return bad_request("DPI must be a number.")
+        if dpi not in {192, 288, 384}:
+            return bad_request("DPI must be one of: 192, 288, 384.")
+
+        binarize = str(request.form.get("ocr_binarize") or "").lower() in {"1", "true", "yes", "on"}
+
+        pdf_jobs.update_job_meta(job_id, page_count=page_count)
+        pdf_jobs.set_job_status(job_id, state="queued", percent=0, stage="queued", message="Queued")
+
+        def _task_ocr():
+            try:
+                pdf_jobs.set_job_status(job_id, state="processing", percent=5, stage="ocr", message="Preparing OCR…")
+
+                def _hook(page_num: int, total_pages: int) -> None:
+                    pct = int((page_num / max(1, total_pages)) * 90)
+                    pct = max(5, min(95, pct))
+                    pdf_jobs.set_job_status(
+                        job_id,
+                        state="processing",
+                        percent=pct,
+                        stage="ocr",
+                        message=f"Running OCR… ({page_num}/{total_pages})",
+                    )
+
+                out = paths.output_dir / "ocr.pdf"
+                pdf_tools.ocr_pdf(
+                    input_pdf=input_pdf,
+                    output_pdf=out,
+                    languages=selected_languages,
+                    dpi=dpi,
+                    binarize=binarize,
+                    page_count=page_count,
+                    status_hook=_hook,
+                )
+
+                pdf_jobs.set_job_status(job_id, state="done", percent=100, stage="done", message="Ready", result_filename=out.name)
+            except Exception as exc:
+                msg = str(exc) or "OCR failed."
+                pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+            finally:
+                pdf_jobs.mark_job_completed(job_id)
+
+        PDF_TOOL_EXECUTOR.submit(_task_ocr)
+        return jsonify({"ok": True, "job_id": job_id, "page_count": page_count})
+
+    if tool_id == "jpeg-to-pdf":
+        uploads = request.files.getlist("file")
+        uploads = [u for u in uploads if u and u.filename]
+        if not uploads:
+            return bad_request("Select at least one image to convert.")
+
+        image_entries: list[dict[str, Any]] = []
+        for idx, upload in enumerate(uploads, start=1):
+            original_name = secure_filename(upload.filename) or f"image_{idx}"
+            ext = Path(original_name).suffix.lower()
+            if not ext:
+                ext = ".png"
+            stored = f"image_{idx:03d}{ext}"
+            target = paths.input_dir / stored
+            upload.save(target)
+            image_entries.append({"idx": idx, "name": original_name, "stored": stored})
+
+        if not image_entries:
+            return bad_request("No valid images were uploaded.")
+
+        digits = max(2, len(str(len(image_entries))))
+        pdf_jobs.update_job_meta(
+            job_id,
+            image_files=image_entries,
+            image_file_count=len(image_entries),
+            image_digits=digits,
+            thumbs_ready=False,
+        )
+        pdf_jobs.set_job_status(
+            job_id,
+            state="processing",
+            percent=1,
+            stage="thumbnails",
+            message="Generating image previews…",
+        )
+
+        def _task_image_thumbnails():
+            try:
+                thumbs_dir = paths.input_dir / "image_thumbs"
+                with suppress(Exception):
+                    shutil.rmtree(thumbs_dir, ignore_errors=True)
+                thumbs_dir.mkdir(parents=True, exist_ok=True)
+
+                total = len(image_entries)
+                for count, entry in enumerate(image_entries, start=1):
+                    img_path = paths.input_dir / entry["stored"]
+                    thumb_path = thumbs_dir / f"image-{entry['idx']:0{digits}d}.png"
+                    pdf_tools.generate_image_thumbnail(
+                        input_image=img_path,
+                        output_png=thumb_path,
+                        max_dim_px=PDF_THUMB_MAX_DIM_PX,
+                    )
+                    pct = int((count / total) * 100)
+                    pct = max(1, min(99, pct))
+                    pdf_jobs.set_job_status(
+                        job_id,
+                        state="processing",
+                        percent=pct,
+                        stage="thumbnails",
+                        message="Generating image previews…",
+                    )
+
+                preview_pdf = paths.output_dir / "preview.pdf"
+                pdf_jobs.set_job_status(
+                    job_id,
+                    state="processing",
+                    percent=99,
+                    stage="preview",
+                    message="Preparing preview PDF…",
+                )
+                pdf_tools.images_to_pdf([paths.input_dir / entry["stored"] for entry in image_entries], preview_pdf)
+                pdf_jobs.update_job_meta(job_id, preview_filename=preview_pdf.name, preview_ready=True)
+
+                pdf_jobs.update_job_meta(job_id, thumbs_ready=True)
+                pdf_jobs.set_job_status(
+                    job_id,
+                    state="awaiting_order",
+                    percent=0,
+                    stage="awaiting_order",
+                    message="Reorder images and click Apply.",
+                )
+            except Exception as exc:
+                msg = str(exc) or "Failed to generate image previews."
+                pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+                pdf_jobs.mark_job_completed(job_id)
+
+        PDF_TOOL_EXECUTOR.submit(_task_image_thumbnails)
+        return jsonify({"ok": True, "job_id": job_id, "image_count": len(image_entries)})
+
+    if tool_id == "compress":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return bad_request("Select a PDF file to compress.")
+        if not (upload.filename or "").lower().endswith(".pdf"):
+            return bad_request("Only PDF files are supported for compression.")
+
+        level = (request.form.get("compression_level") or "medium").strip().lower()
+        if level not in {"low", "medium", "high"}:
+            level = "medium"
+        method = (request.form.get("compression_method") or "photon").strip().lower()
+        if method not in {"rectal", "photon"}:
+            method = "photon"
+
+        input_pdf = paths.input_dir / "input.pdf"
+        upload.save(input_pdf)
+
+        pdf_jobs.set_job_status(job_id, state="queued", percent=0, stage="queued", message="Queued")
+
+        def _task_compress():
+            try:
+                pdf_jobs.set_job_status(
+                    job_id,
+                    state="processing",
+                    percent=25,
+                    stage="compress",
+                    message="Compressing PDF…",
+                )
+                out = paths.output_dir / "compressed.pdf"
+                result = pdf_tools.compress_pdf(input_pdf=input_pdf, output_pdf=out, level=level, method=method)
+
+                def _format_bytes(value: int) -> str:
+                    size = float(max(0, value))
+                    for unit in ("B", "KB", "MB", "GB", "TB"):
+                        if size < 1024 or unit == "TB":
+                            if unit == "B":
+                                return f"{int(size)} {unit}"
+                            return f"{size:.1f} {unit}"
+                        size /= 1024
+                    return f"{size:.1f} TB"
+
+                before = _format_bytes(result.input_bytes)
+                after = _format_bytes(result.output_bytes)
+                if result.input_bytes <= 0:
+                    message = "Ready"
+                elif result.output_bytes < result.input_bytes:
+                    delta = 100 - (result.output_bytes / result.input_bytes * 100)
+                    message = f"Ready ({before} -> {after}, -{delta:.0f}%)"
+                elif result.output_bytes > result.input_bytes:
+                    delta = (result.output_bytes / result.input_bytes * 100) - 100
+                    alt = "Photon" if method == "rectal" else "Rectal"
+                    message = f"Ready ({before} -> {after}, +{delta:.0f}%). Try {alt} for smaller output."
+                else:
+                    alt = "Photon" if method == "rectal" else "Rectal"
+                    message = f"Ready ({before} -> {after}, 0%). Try {alt} for smaller output."
+
+                pdf_jobs.set_job_status(
+                    job_id,
+                    state="done",
+                    percent=100,
+                    stage="done",
+                    message=message,
+                    result_filename=out.name,
+                )
+            except Exception as exc:
+                msg = str(exc) or "Compression failed."
+                pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+            finally:
+                pdf_jobs.mark_job_completed(job_id)
+
+        PDF_TOOL_EXECUTOR.submit(_task_compress)
+        return jsonify({"ok": True, "job_id": job_id})
+
+    if tool_id == "reorder-pages":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return bad_request("Select a PDF file to reorder.")
+        if not (upload.filename or "").lower().endswith(".pdf"):
+            return bad_request("Only PDF files are supported for page reordering.")
+
+        input_pdf = paths.input_dir / "input.pdf"
+        upload.save(input_pdf)
+
+        try:
+            page_count = pdf_tools.count_pdf_pages(input_pdf)
+        except Exception as exc:
+            return bad_request(str(exc) or "Unable to read the PDF.")
+
+        if page_count > PDF_THUMB_MAX_PAGES:
+            return bad_request(
+                f"This PDF has {page_count} pages. The current preview limit is {PDF_THUMB_MAX_PAGES} pages."
+            )
+
+        thumbs_dir = paths.input_dir / "thumbs"
+        with suppress(Exception):
+            shutil.rmtree(thumbs_dir, ignore_errors=True)
+        thumbs_dir.mkdir(parents=True, exist_ok=True)
+
+        pdf_jobs.update_job_meta(job_id, page_count=page_count, thumbs_ready=False)
+        pdf_jobs.set_job_status(
+            job_id,
+            state="processing",
+            percent=1,
+            stage="thumbnails",
+            message="Generating page previews…",
+        )
+
+        def _task_thumbnails():
+            try:
+                def _hook(pct: int) -> None:
+                    # Keep room for the final UI state
+                    pct2 = max(1, min(99, int(pct)))
+                    pdf_jobs.set_job_status(
+                        job_id,
+                        state="processing",
+                        percent=pct2,
+                        stage="thumbnails",
+                        message="Generating page previews…",
+                    )
+
+                pdf_tools.generate_pdf_thumbnails(
+                    input_pdf=input_pdf,
+                    output_dir=thumbs_dir,
+                    page_count=page_count,
+                    max_dim_px=PDF_THUMB_MAX_DIM_PX,
+                    status_hook=_hook,
+                )
+                pdf_jobs.update_job_meta(job_id, thumbs_ready=True)
+                pdf_jobs.set_job_status(
+                    job_id,
+                    state="awaiting_order",
+                    percent=0,
+                    stage="awaiting_order",
+                    message="Reorder pages and click Apply.",
+                )
+            except Exception as exc:
+                msg = str(exc) or "Failed to generate page previews."
+                pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+                pdf_jobs.mark_job_completed(job_id)
+
+        PDF_TOOL_EXECUTOR.submit(_task_thumbnails)
+        return jsonify({"ok": True, "job_id": job_id, "page_count": page_count})
+
+    if tool_id == "flatten":
+        upload = request.files.get("file")
+        if not upload or not upload.filename:
+            return bad_request("Select a PDF file to flatten.")
+        if not (upload.filename or "").lower().endswith(".pdf"):
+            return bad_request("Only PDF files are supported for flattening.")
+
+        input_pdf = paths.input_dir / "input.pdf"
+        upload.save(input_pdf)
+
+        pdf_jobs.set_job_status(job_id, state="queued", percent=0, stage="queued", message="Queued")
+
+        def _task_flatten():
+            try:
+                pdf_jobs.set_job_status(job_id, state="processing", percent=25, stage="flatten", message="Flattening PDF…")
+                out = paths.output_dir / "flattened.pdf"
+                pdf_tools.flatten_pdf_annotations(input_pdf=input_pdf, output_pdf=out, mode="all")
+                pdf_jobs.set_job_status(job_id, state="done", percent=100, stage="done", message="Ready", result_filename=out.name)
+            except Exception as exc:
+                msg = str(exc) or "Flatten failed."
+                pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+            finally:
+                pdf_jobs.mark_job_completed(job_id)
+
+        PDF_TOOL_EXECUTOR.submit(_task_flatten)
+        return jsonify({"ok": True, "job_id": job_id})
+
+    return bad_request("Unknown tool.")
+
+
+@app.post("/api/pdf-tools/jobs/<job_id>/apply-order")
+@require_login_api
+def api_pdf_tools_apply_order(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "reorder-pages":
+        return jsonify({"ok": False, "msg": "This job is not a reorder-pages job."}), 400
+
+    data = request.get_json(silent=True) or {}
+    order_raw = data.get("order")
+    if not isinstance(order_raw, list) or not order_raw:
+        return jsonify({"ok": False, "msg": "Missing 'order' list."}), 400
+
+    page_count = int(meta.get("page_count") or 0)
+    if page_count <= 0:
+        return jsonify({"ok": False, "msg": "Job is missing page count."}), 400
+
+    try:
+        # client sends 1-based page numbers
+        order_1based = [int(v) for v in order_raw]
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "Order must contain integers."}), 400
+
+    if len(order_1based) != page_count:
+        return jsonify({"ok": False, "msg": f"Order must list all {page_count} pages."}), 400
+    if set(order_1based) != set(range(1, page_count + 1)):
+        return jsonify({"ok": False, "msg": "Order must be a permutation of all pages."}), 400
+
+    order_0based = [v - 1 for v in order_1based]
+    paths = pdf_jobs.build_job_paths(job_id)
+    input_pdf = paths.input_dir / "input.pdf"
+    if not input_pdf.exists():
+        return jsonify({"ok": False, "msg": "Input PDF is missing (job expired?)"}), 410
+
+    pdf_jobs.set_job_status(job_id, state="processing", percent=25, stage="reorder", message="Reordering pages…")
+
+    def _task_reorder():
+        try:
+            out = paths.output_dir / "reordered.pdf"
+            pdf_tools.reorder_pdf(input_pdf, order_0based, out)
+            pdf_jobs.set_job_status(job_id, state="done", percent=100, stage="done", message="Ready", result_filename=out.name)
+        except Exception as exc:
+            msg = str(exc) or "Reorder failed."
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+        finally:
+            pdf_jobs.mark_job_completed(job_id)
+
+    PDF_TOOL_EXECUTOR.submit(_task_reorder)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/pdf-tools/jobs/<job_id>/apply-merge")
+@require_login_api
+def api_pdf_tools_apply_merge(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "merge":
+        return jsonify({"ok": False, "msg": "This job is not a merge job."}), 400
+
+    merge_files = meta.get("merge_files") or []
+    if not isinstance(merge_files, list) or len(merge_files) < 2:
+        return jsonify({"ok": False, "msg": "Job is missing merge file metadata."}), 400
+
+    by_idx: dict[int, str] = {}
+    for item in merge_files:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("idx"))
+        except (TypeError, ValueError):
+            continue
+        stored = item.get("stored")
+        if isinstance(stored, str) and stored:
+            by_idx[idx] = stored
+
+    file_count = len(by_idx)
+    if file_count < 2:
+        return jsonify({"ok": False, "msg": "Job has fewer than two valid PDFs."}), 400
+
+    data = request.get_json(silent=True) or {}
+    order_raw = data.get("order")
+    if not isinstance(order_raw, list) or not order_raw:
+        return jsonify({"ok": False, "msg": "Missing 'order' list."}), 400
+
+    try:
+        order_1based = [int(v) for v in order_raw]
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "Order must contain integers."}), 400
+
+    if len(order_1based) != file_count:
+        return jsonify({"ok": False, "msg": f"Order must list all {file_count} PDFs."}), 400
+    if set(order_1based) != set(range(1, file_count + 1)):
+        return jsonify({"ok": False, "msg": "Order must be a permutation of all PDFs."}), 400
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    input_paths: list[Path] = []
+    for idx in order_1based:
+        stored = by_idx.get(idx)
+        if not stored:
+            return jsonify({"ok": False, "msg": "Input file missing (job expired?)"}), 410
+        p = paths.input_dir / stored
+        if not p.exists():
+            return jsonify({"ok": False, "msg": "Input file missing (job expired?)"}), 410
+        input_paths.append(p)
+
+    pdf_jobs.set_job_status(job_id, state="processing", percent=25, stage="merge", message="Merging PDFs…")
+
+    def _task_merge():
+        try:
+            out = paths.output_dir / "merged.pdf"
+            pdf_tools.merge_pdfs(input_paths, out)
+            pdf_jobs.set_job_status(job_id, state="done", percent=100, stage="done", message="Ready", result_filename=out.name)
+        except Exception as exc:
+            msg = str(exc) or "Merge failed."
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+        finally:
+            pdf_jobs.mark_job_completed(job_id)
+
+    PDF_TOOL_EXECUTOR.submit(_task_merge)
+    return jsonify({"ok": True})
+
+@app.post("/api/pdf-tools/jobs/<job_id>/split-thumbs")
+@require_login_api
+def api_pdf_tools_split_thumbnails(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "split":
+        return jsonify({"ok": False, "msg": "This job is not a split job."}), 400
+
+    if bool(meta.get("thumbs_ready")):
+        return jsonify({"ok": True, "thumbs_ready": True})
+
+    page_count = int(meta.get("page_count") or 0)
+    if page_count <= 0:
+        return jsonify({"ok": False, "msg": "Job is missing page count."}), 400
+    if page_count > PDF_THUMB_MAX_PAGES:
+        return jsonify(
+            {"ok": False, "msg": f"This PDF has {page_count} pages. Preview limit is {PDF_THUMB_MAX_PAGES} pages."}
+        ), 400
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    input_pdf = paths.input_dir / "input.pdf"
+    if not input_pdf.exists():
+        return jsonify({"ok": False, "msg": "Input PDF is missing (job expired?)"}), 410
+
+    thumbs_dir = paths.input_dir / "thumbs"
+    with suppress(Exception):
+        shutil.rmtree(thumbs_dir, ignore_errors=True)
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_jobs.update_job_meta(job_id, thumbs_ready=False)
+    pdf_jobs.set_job_status(
+        job_id,
+        state="processing",
+        percent=1,
+        stage="thumbnails",
+        message="Generating page previews…",
+    )
+
+    def _task_split_thumbnails():
+        try:
+            def _hook(pct: int) -> None:
+                pct2 = max(1, min(99, int(pct)))
+                pdf_jobs.set_job_status(
+                    job_id,
+                    state="processing",
+                    percent=pct2,
+                    stage="thumbnails",
+                    message="Generating page previews…",
+                )
+
+            pdf_tools.generate_pdf_thumbnails(
+                input_pdf=input_pdf,
+                output_dir=thumbs_dir,
+                page_count=page_count,
+                max_dim_px=PDF_THUMB_MAX_DIM_PX,
+                status_hook=_hook,
+            )
+            pdf_jobs.update_job_meta(job_id, thumbs_ready=True)
+            pdf_jobs.set_job_status(
+                job_id,
+                state="awaiting_split",
+                percent=0,
+                stage="awaiting_split",
+                message="Ready to split.",
+            )
+        except Exception as exc:
+            msg = str(exc) or "Failed to generate page previews."
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+            pdf_jobs.mark_job_completed(job_id)
+
+    PDF_TOOL_EXECUTOR.submit(_task_split_thumbnails)
+    return jsonify({"ok": True, "thumbs_ready": False})
+
+
+@app.post("/api/pdf-tools/jobs/<job_id>/remove-thumbs")
+@require_login_api
+def api_pdf_tools_remove_thumbnails(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "remove-pages":
+        return jsonify({"ok": False, "msg": "This job is not a remove-pages job."}), 400
+
+    if bool(meta.get("thumbs_ready")):
+        return jsonify({"ok": True, "thumbs_ready": True})
+
+    page_count = int(meta.get("page_count") or 0)
+    if page_count <= 0:
+        return jsonify({"ok": False, "msg": "Job is missing page count."}), 400
+    if page_count > PDF_THUMB_MAX_PAGES:
+        return jsonify(
+            {"ok": False, "msg": f"This PDF has {page_count} pages. Preview limit is {PDF_THUMB_MAX_PAGES} pages."}
+        ), 400
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    input_pdf = paths.input_dir / "input.pdf"
+    if not input_pdf.exists():
+        return jsonify({"ok": False, "msg": "Input PDF is missing (job expired?)"}), 410
+
+    thumbs_dir = paths.input_dir / "thumbs"
+    with suppress(Exception):
+        shutil.rmtree(thumbs_dir, ignore_errors=True)
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_jobs.update_job_meta(job_id, thumbs_ready=False)
+    pdf_jobs.set_job_status(
+        job_id,
+        state="processing",
+        percent=1,
+        stage="thumbnails",
+        message="Generating page previews…",
+    )
+
+    def _task_remove_thumbnails():
+        try:
+            def _hook(pct: int) -> None:
+                pct2 = max(1, min(99, int(pct)))
+                pdf_jobs.set_job_status(
+                    job_id,
+                    state="processing",
+                    percent=pct2,
+                    stage="thumbnails",
+                    message="Generating page previews…",
+                )
+
+            pdf_tools.generate_pdf_thumbnails(
+                input_pdf=input_pdf,
+                output_dir=thumbs_dir,
+                page_count=page_count,
+                max_dim_px=PDF_THUMB_MAX_DIM_PX,
+                status_hook=_hook,
+            )
+            pdf_jobs.update_job_meta(job_id, thumbs_ready=True)
+            pdf_jobs.set_job_status(
+                job_id,
+                state="awaiting_remove",
+                percent=0,
+                stage="awaiting_remove",
+                message="Ready to remove pages.",
+            )
+        except Exception as exc:
+            msg = str(exc) or "Failed to generate page previews."
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+            pdf_jobs.mark_job_completed(job_id)
+
+    PDF_TOOL_EXECUTOR.submit(_task_remove_thumbnails)
+    return jsonify({"ok": True, "thumbs_ready": False})
+
+
+@app.post("/api/pdf-tools/jobs/<job_id>/apply-split")
+@require_login_api
+def api_pdf_tools_apply_split(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "split":
+        return jsonify({"ok": False, "msg": "This job is not a split job."}), 400
+
+    page_count = int(meta.get("page_count") or 0)
+    if page_count <= 0:
+        return jsonify({"ok": False, "msg": "Job is missing page count."}), 400
+
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode") or "").strip().lower()
+    if mode not in {"ranges", "odd", "even", "all", "visual"}:
+        return jsonify({"ok": False, "msg": "Invalid split mode."}), 400
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    input_pdf = paths.input_dir / "input.pdf"
+    if not input_pdf.exists():
+        return jsonify({"ok": False, "msg": "Input PDF is missing (job expired?)"}), 410
+
+    ranges: list[tuple[int, int]] = []
+    selected_pages: list[int] = []
+
+    if mode == "ranges":
+        raw_ranges = data.get("ranges")
+        if not isinstance(raw_ranges, list) or not raw_ranges:
+            return jsonify({"ok": False, "msg": "Provide at least one page range."}), 400
+        for item in raw_ranges:
+            start = end = None
+            if isinstance(item, dict):
+                start = item.get("start")
+                end = item.get("end")
+            elif isinstance(item, (list, tuple)) and len(item) == 2:
+                start, end = item
+            try:
+                start_i = int(start)
+                end_i = int(end)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "msg": "Ranges must contain valid numbers."}), 400
+            if start_i < 1 or end_i < 1 or start_i > end_i:
+                return jsonify({"ok": False, "msg": "Ranges must be in ascending order and start at 1."}), 400
+            if end_i > page_count:
+                return jsonify({"ok": False, "msg": f"Range exceeds page count ({page_count})."}), 400
+            ranges.append((start_i, end_i))
+
+    if mode == "visual":
+        raw_pages = data.get("pages")
+        if not isinstance(raw_pages, list) or not raw_pages:
+            return jsonify({"ok": False, "msg": "Select at least one page."}), 400
+        for value in raw_pages:
+            try:
+                page_i = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= page_i <= page_count:
+                selected_pages.append(page_i)
+        if not selected_pages:
+            return jsonify({"ok": False, "msg": "Select at least one valid page."}), 400
+        selected_pages = sorted(set(selected_pages))
+
+    pdf_jobs.set_job_status(job_id, state="processing", percent=25, stage="split", message="Splitting PDF…")
+
+    def _task_split():
+        try:
+            if mode == "ranges":
+                output_dir = paths.output_dir / "ranges"
+                outputs = pdf_tools.split_pdf_ranges(input_pdf, ranges, output_dir)
+                zip_path = paths.output_dir / "split_ranges.zip"
+                pdf_tools.zip_paths(outputs, zip_path)
+                result_name = zip_path.name
+            elif mode == "all":
+                output_dir = paths.output_dir / "pages"
+                outputs = pdf_tools.split_pdf_all_pages(input_pdf, output_dir)
+                zip_path = paths.output_dir / "split_pages.zip"
+                pdf_tools.zip_paths(outputs, zip_path)
+                result_name = zip_path.name
+            elif mode == "odd":
+                out = paths.output_dir / "odd_pages.pdf"
+                pdf_tools.split_pdf_odd_even(input_pdf, odd=True, output_file=out)
+                result_name = out.name
+            elif mode == "even":
+                out = paths.output_dir / "even_pages.pdf"
+                pdf_tools.split_pdf_odd_even(input_pdf, odd=False, output_file=out)
+                result_name = out.name
+            elif mode == "visual":
+                out = paths.output_dir / "selected_pages.pdf"
+                pdf_tools.split_pdf_selected_pages(input_pdf, selected_pages, out)
+                result_name = out.name
+            else:
+                raise RuntimeError("Unsupported split mode.")
+
+            pdf_jobs.set_job_status(
+                job_id,
+                state="done",
+                percent=100,
+                stage="done",
+                message="Ready",
+                result_filename=result_name,
+            )
+        except Exception as exc:
+            msg = str(exc) or "Split failed."
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+        finally:
+            pdf_jobs.mark_job_completed(job_id)
+
+    PDF_TOOL_EXECUTOR.submit(_task_split)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/pdf-tools/jobs/<job_id>/apply-remove")
+@require_login_api
+def api_pdf_tools_apply_remove(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "remove-pages":
+        return jsonify({"ok": False, "msg": "This job is not a remove-pages job."}), 400
+
+    page_count = int(meta.get("page_count") or 0)
+    if page_count <= 0:
+        return jsonify({"ok": False, "msg": "Job is missing page count."}), 400
+
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode") or "").strip().lower()
+    if mode not in {"ranges", "odd", "even", "visual"}:
+        return jsonify({"ok": False, "msg": "Invalid remove mode."}), 400
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    input_pdf = paths.input_dir / "input.pdf"
+    if not input_pdf.exists():
+        return jsonify({"ok": False, "msg": "Input PDF is missing (job expired?)"}), 410
+
+    remove_pages: set[int] = set()
+
+    if mode == "ranges":
+        raw_ranges = data.get("ranges")
+        if not isinstance(raw_ranges, list) or not raw_ranges:
+            return jsonify({"ok": False, "msg": "Provide at least one page range."}), 400
+        for item in raw_ranges:
+            start = end = None
+            if isinstance(item, dict):
+                start = item.get("start")
+                end = item.get("end")
+            elif isinstance(item, (list, tuple)) and len(item) == 2:
+                start, end = item
+            try:
+                start_i = int(start)
+                end_i = int(end)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "msg": "Ranges must contain valid numbers."}), 400
+            if start_i < 1 or end_i < 1 or start_i > end_i:
+                return jsonify({"ok": False, "msg": "Ranges must be in ascending order and start at 1."}), 400
+            if end_i > page_count:
+                return jsonify({"ok": False, "msg": f"Range exceeds page count ({page_count})."}), 400
+            remove_pages.update(range(start_i, end_i + 1))
+
+    if mode == "visual":
+        raw_pages = data.get("pages")
+        if not isinstance(raw_pages, list) or not raw_pages:
+            return jsonify({"ok": False, "msg": "Select at least one page to remove."}), 400
+        for value in raw_pages:
+            try:
+                page_i = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= page_i <= page_count:
+                remove_pages.add(page_i)
+        if not remove_pages:
+            return jsonify({"ok": False, "msg": "Select at least one valid page."}), 400
+
+    if mode == "odd":
+        remove_pages.update(range(1, page_count + 1, 2))
+    if mode == "even":
+        remove_pages.update(range(2, page_count + 1, 2))
+
+    if not remove_pages:
+        return jsonify({"ok": False, "msg": "Select at least one page to remove."}), 400
+    if len(remove_pages) >= page_count:
+        return jsonify({"ok": False, "msg": "Removing all pages is not allowed."}), 400
+
+    pdf_jobs.set_job_status(job_id, state="processing", percent=25, stage="remove", message="Removing pages…")
+
+    def _task_remove():
+        try:
+            out = paths.output_dir / "pages_removed.pdf"
+            pdf_tools.remove_pdf_pages(input_pdf, sorted(remove_pages), out)
+            pdf_jobs.set_job_status(job_id, state="done", percent=100, stage="done", message="Ready", result_filename=out.name)
+        except Exception as exc:
+            msg = str(exc) or "Remove pages failed."
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+        finally:
+            pdf_jobs.mark_job_completed(job_id)
+
+    PDF_TOOL_EXECUTOR.submit(_task_remove)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/pdf-tools/jobs/<job_id>/apply-page-numbers")
+@require_login_api
+def api_pdf_tools_apply_page_numbers(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "page-numbers":
+        return jsonify({"ok": False, "msg": "This job is not a page-numbers job."}), 400
+
+    page_count = int(meta.get("page_count") or 0)
+    if page_count <= 0:
+        return jsonify({"ok": False, "msg": "Job is missing page count."}), 400
+
+    data = request.get_json(silent=True) or {}
+    try:
+        start_page = int(data.get("start_page"))
+        end_page = int(data.get("end_page"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "Start/end page must be numbers."}), 400
+
+    if start_page < 1 or end_page < 1 or start_page > end_page:
+        return jsonify({"ok": False, "msg": "Page ranges must be in ascending order and start at 1."}), 400
+    if end_page > page_count:
+        return jsonify({"ok": False, "msg": f"End page exceeds page count ({page_count})."}), 400
+
+    position = str(data.get("position") or "").strip().lower()
+    if position not in {"top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"}:
+        return jsonify({"ok": False, "msg": "Invalid position."}), 400
+
+    font_name = str(data.get("font_name") or "").strip()
+    if font_name not in {"Helvetica", "Helvetica-Bold", "Times-Roman", "Times-Bold", "Courier"}:
+        return jsonify({"ok": False, "msg": "Unsupported font."}), 400
+
+    try:
+        font_size = int(data.get("font_size"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "Font size must be a number."}), 400
+    if font_size < 6 or font_size > 72:
+        return jsonify({"ok": False, "msg": "Font size must be between 6 and 72."}), 400
+
+    font_color = str(data.get("font_color") or "").strip()
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    input_pdf = paths.input_dir / "input.pdf"
+    if not input_pdf.exists():
+        return jsonify({"ok": False, "msg": "Input PDF is missing (job expired?)"}), 410
+
+    pdf_jobs.set_job_status(job_id, state="processing", percent=25, stage="page_numbers", message="Adding page numbers…")
+
+    def _task_numbers():
+        try:
+            out = paths.output_dir / "page_numbers.pdf"
+            pdf_tools.add_page_numbers(
+                input_pdf=input_pdf,
+                output_pdf=out,
+                start_page=start_page,
+                end_page=end_page,
+                position=position,
+                font_name=font_name,
+                font_size=font_size,
+                font_color=font_color,
+            )
+            pdf_jobs.set_job_status(job_id, state="done", percent=100, stage="done", message="Ready", result_filename=out.name)
+        except Exception as exc:
+            msg = str(exc) or "Page numbering failed."
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+        finally:
+            pdf_jobs.mark_job_completed(job_id)
+
+    PDF_TOOL_EXECUTOR.submit(_task_numbers)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/pdf-tools/jobs/<job_id>/apply-images")
+@require_login_api
+def api_pdf_tools_apply_images(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "jpeg-to-pdf":
+        return jsonify({"ok": False, "msg": "This job is not an image-to-PDF job."}), 400
+
+    image_files = meta.get("image_files") or []
+    if not isinstance(image_files, list) or not image_files:
+        return jsonify({"ok": False, "msg": "Job is missing image metadata."}), 400
+
+    data = request.get_json(silent=True) or {}
+    order_raw = data.get("order")
+    if not isinstance(order_raw, list) or not order_raw:
+        return jsonify({"ok": False, "msg": "Missing 'order' list."}), 400
+
+    try:
+        order = [int(v) for v in order_raw]
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "Order must contain integers."}), 400
+
+    valid_ids = []
+    for item in image_files:
+        if isinstance(item, dict):
+            try:
+                valid_ids.append(int(item.get("idx")))
+            except (TypeError, ValueError):
+                continue
+
+    if len(order) != len(valid_ids):
+        return jsonify({"ok": False, "msg": "Order must include all images."}), 400
+    if set(order) != set(valid_ids):
+        return jsonify({"ok": False, "msg": "Order must be a permutation of all images."}), 400
+
+    by_idx: dict[int, str] = {}
+    for item in image_files:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("idx"))
+        except (TypeError, ValueError):
+            continue
+        stored = item.get("stored")
+        if isinstance(stored, str) and stored:
+            by_idx[idx] = stored
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    input_paths: list[Path] = []
+    for idx in order:
+        stored = by_idx.get(idx)
+        if not stored:
+            return jsonify({"ok": False, "msg": "Input file missing (job expired?)"}), 410
+        path = paths.input_dir / stored
+        if not path.exists():
+            return jsonify({"ok": False, "msg": "Input file missing (job expired?)"}), 410
+        input_paths.append(path)
+
+    pdf_jobs.set_job_status(job_id, state="processing", percent=25, stage="convert", message="Converting images…")
+
+    def _task_images():
+        try:
+            out = paths.output_dir / "images.pdf"
+            pdf_tools.images_to_pdf(input_paths, out)
+            pdf_jobs.set_job_status(job_id, state="done", percent=100, stage="done", message="Ready", result_filename=out.name)
+        except Exception as exc:
+            msg = str(exc) or "Image conversion failed."
+            pdf_jobs.set_job_status(job_id, state="error", percent=100, stage="error", message=msg, error=msg)
+        finally:
+            pdf_jobs.mark_job_completed(job_id)
+
+    PDF_TOOL_EXECUTOR.submit(_task_images)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/pdf-tools/jobs/<job_id>/cancel")
+@require_login_api
+def api_pdf_tools_job_cancel(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "msg": "Job expired."}), 410
+
+    if bool(meta.get("cancel_requested")):
+        with suppress(Exception):
+            pdf_jobs.mark_job_completed(job_id)
+        return jsonify({"ok": True})
+
+    pdf_jobs.update_job_meta(
+        job_id,
+        cancel_requested=True,
+        state="canceled",
+        percent=100,
+        stage="canceled",
+        message="Canceled.",
+        error=None,
+        result_filename=None,
+        thumbs_ready=False,
+    )
+    with suppress(Exception):
+        pdf_jobs.mark_job_completed(job_id)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/pdf-tools/jobs/<job_id>/status")
+@require_login_api
+def api_pdf_tools_job_status(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "state": "expired", "msg": "Job expired."}), 410
+
+    expires_in = None
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            expires_in = max(0, int(float(expires_at) - time.time()))
+
+    merge_files_public: list[dict[str, Any]] = []
+    merge_files_meta = meta.get("merge_files")
+    if isinstance(merge_files_meta, list):
+        for item in merge_files_meta:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("idx"))
+            except (TypeError, ValueError):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            merge_files_public.append({"idx": idx, "name": name})
+
+    image_files_public: list[dict[str, Any]] = []
+    image_files_meta = meta.get("image_files")
+    if isinstance(image_files_meta, list):
+        for item in image_files_meta:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("idx"))
+            except (TypeError, ValueError):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            image_files_public.append({"idx": idx, "name": name})
+
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": meta.get("job_id"),
+            "tool": meta.get("tool"),
+            "state": meta.get("state"),
+            "percent": meta.get("percent", 0),
+            "stage": meta.get("stage", ""),
+            "message": meta.get("message", ""),
+            "error": meta.get("error"),
+            "result_filename": meta.get("result_filename"),
+            "expires_at": meta.get("expires_at"),
+            "expires_in": expires_in,
+            "page_count": meta.get("page_count"),
+            "thumbs_ready": bool(meta.get("thumbs_ready", False)),
+            "merge_file_count": meta.get("merge_file_count") or len(merge_files_public),
+            "merge_files": merge_files_public,
+            "image_file_count": meta.get("image_file_count") or len(image_files_public),
+            "image_files": image_files_public,
+        }
+    )
+
+
+@app.get("/api/pdf-tools/jobs/<job_id>/thumb/<int:page_number>")
+@require_login_api
+def api_pdf_tools_job_thumbnail(job_id: str, page_number: int):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    tool_id = meta.get("tool")
+    if tool_id not in {"reorder-pages", "split", "remove-pages", "page-numbers"}:
+        return jsonify({"ok": False, "msg": "Thumbnails are only available for reorder-pages, split, remove-pages, and page-numbers."}), 400
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "msg": "Job expired."}), 410
+
+    page_count = int(meta.get("page_count") or 0)
+    if page_number < 1 or (page_count and page_number > page_count):
+        return jsonify({"ok": False, "msg": "Page not found"}), 404
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    root = (paths.input_dir / "thumbs").resolve()
+
+    candidates: list[Path] = []
+    if page_count:
+        digits = max(1, len(str(page_count)))
+        candidates.append((root / f"page-{page_number:0{digits}d}.png").resolve())
+    candidates.append((root / f"page-{page_number}.png").resolve())
+
+    thumb: Path | None = None
+    for candidate in candidates:
+        if not str(candidate).startswith(str(root)):
+            return jsonify({"ok": False, "msg": "Not found"}), 404
+        if candidate.exists():
+            thumb = candidate
+            break
+
+    if not thumb and tool_id == "page-numbers":
+        input_pdf = paths.input_dir / "input.pdf"
+        if not input_pdf.exists():
+            return jsonify({"ok": False, "msg": "Input PDF is missing (job expired?)"}), 410
+        root.mkdir(parents=True, exist_ok=True)
+        target = candidates[0]
+        try:
+            pdf_tools.generate_pdf_page_thumbnail(
+                input_pdf=input_pdf,
+                output_png=target,
+                page_number=page_number,
+                max_dim_px=PDF_THUMB_MAX_DIM_PX,
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "msg": str(exc) or "Thumbnail failed."}), 400
+        if target.exists():
+            thumb = target
+
+    if not thumb:
+        # still generating or job expired
+        return jsonify({"ok": False, "msg": "Thumbnail not ready"}), 404
+
+    return send_file(thumb, mimetype="image/png", conditional=True)
+
+
+@app.get("/api/pdf-tools/jobs/<job_id>/image-thumb/<int:image_index>")
+@require_login_api
+def api_pdf_tools_job_image_thumbnail(job_id: str, image_index: int):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "jpeg-to-pdf":
+        return jsonify({"ok": False, "msg": "Image thumbnails are only available for image-to-PDF jobs."}), 400
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "msg": "Job expired."}), 410
+
+    image_files = meta.get("image_files") or []
+    if not isinstance(image_files, list) or not image_files:
+        return jsonify({"ok": False, "msg": "Thumbnail not ready"}), 404
+
+    count = 0
+    for item in image_files:
+        if isinstance(item, dict):
+            count += 1
+    if image_index < 1 or image_index > count:
+        return jsonify({"ok": False, "msg": "Not found"}), 404
+
+    digits = int(meta.get("image_digits") or max(2, len(str(count))))
+    paths = pdf_jobs.build_job_paths(job_id)
+    root = (paths.input_dir / "image_thumbs").resolve()
+    thumb = (root / f"image-{image_index:0{digits}d}.png").resolve()
+    if not str(thumb).startswith(str(root)):
+        return jsonify({"ok": False, "msg": "Not found"}), 404
+    if not thumb.exists():
+        return jsonify({"ok": False, "msg": "Thumbnail not ready"}), 404
+
+    return send_file(thumb, mimetype="image/png", conditional=True)
+
+
+@app.get("/api/pdf-tools/jobs/<job_id>/image/<int:image_index>")
+@require_login_api
+def api_pdf_tools_job_image(job_id: str, image_index: int):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "jpeg-to-pdf":
+        return jsonify({"ok": False, "msg": "Images are only available for image-to-PDF jobs."}), 400
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "msg": "Job expired."}), 410
+
+    image_files = meta.get("image_files") or []
+    if not isinstance(image_files, list) or not image_files:
+        return jsonify({"ok": False, "msg": "Image not found"}), 404
+
+    stored = None
+    for item in image_files:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("idx"))
+        except (TypeError, ValueError):
+            continue
+        if idx == image_index:
+            stored = item.get("stored")
+            break
+    if not stored or not isinstance(stored, str):
+        return jsonify({"ok": False, "msg": "Image not found"}), 404
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    root = paths.input_dir.resolve()
+    target = (paths.input_dir / stored).resolve()
+    if not str(target).startswith(str(root)) or not target.exists():
+        return jsonify({"ok": False, "msg": "Image not found"}), 404
+
+    return send_file(target, conditional=True)
+
+
+@app.get("/api/pdf-tools/jobs/<job_id>/image-preview")
+@require_login_api
+def api_pdf_tools_job_image_preview(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "jpeg-to-pdf":
+        return jsonify({"ok": False, "msg": "Preview is only available for image-to-PDF jobs."}), 400
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "msg": "Job expired."}), 410
+
+    preview_name = meta.get("preview_filename") or "preview.pdf"
+    paths = pdf_jobs.build_job_paths(job_id)
+    target = (paths.output_dir / preview_name).resolve()
+    root = paths.output_dir.resolve()
+    if not str(target).startswith(str(root)) or not target.exists():
+        return jsonify({"ok": False, "msg": "Preview not ready"}), 404
+
+    return send_file(target, mimetype="application/pdf", conditional=True)
+
+
+@app.get("/api/pdf-tools/jobs/<job_id>/merge-thumb/<int:file_index>")
+@require_login_api
+def api_pdf_tools_job_merge_thumbnail(job_id: str, file_index: int):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    if meta.get("tool") != "merge":
+        return jsonify({"ok": False, "msg": "Merge thumbnails are only available for merge jobs."}), 400
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "msg": "Job expired."}), 410
+
+    merge_files = meta.get("merge_files") or []
+    if not isinstance(merge_files, list) or len(merge_files) < 1:
+        return jsonify({"ok": False, "msg": "Thumbnail not ready"}), 404
+
+    file_count = 0
+    for item in merge_files:
+        if isinstance(item, dict):
+            file_count += 1
+
+    if file_index < 1 or file_index > file_count:
+        return jsonify({"ok": False, "msg": "Not found"}), 404
+
+    paths = pdf_jobs.build_job_paths(job_id)
+    root = (paths.input_dir / "merge_thumbs").resolve()
+    thumb = (root / f"file-{file_index:02d}.png").resolve()
+    if not str(thumb).startswith(str(root)):
+        return jsonify({"ok": False, "msg": "Not found"}), 404
+    if not thumb.exists():
+        return jsonify({"ok": False, "msg": "Thumbnail not ready"}), 404
+
+    return send_file(thumb, mimetype="image/png", conditional=True)
+
+
+@app.get("/api/pdf-tools/jobs/<job_id>/view")
+@require_login_api
+def api_pdf_tools_job_view(job_id: str):
+    """Serve the finished PDF inline for in-app preview (not as a download)."""
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "msg": "Job expired."}), 410
+
+    if (meta.get("state") or "").lower() != "done":
+        return jsonify({"ok": False, "msg": "Job is not ready for preview yet."}), 400
+
+    result_filename = meta.get("result_filename") or "result.pdf"
+    paths = pdf_jobs.build_job_paths(job_id)
+    target = (paths.output_dir / result_filename).resolve()
+    root = paths.output_dir.resolve()
+    if not str(target).startswith(str(root)) or not target.exists():
+        return jsonify({"ok": False, "msg": "Result file missing (job expired?)"}), 410
+
+    return send_file(target, mimetype="application/pdf", conditional=True)
+
+
+@app.get("/api/pdf-tools/jobs/<job_id>/download")
+@require_login_api
+def api_pdf_tools_job_download(job_id: str):
+    owner_user_id = _current_user_id()
+    try:
+        meta = pdf_jobs.get_job_meta(job_id)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+    try:
+        pdf_jobs.assert_job_owner(meta, owner_user_id=owner_user_id)
+    except PermissionError:
+        return jsonify({"ok": False, "msg": "Job not found"}), 404
+
+    expires_at = meta.get("expires_at")
+    if expires_at:
+        with suppress(TypeError, ValueError):
+            if time.time() > float(expires_at):
+                return jsonify({"ok": False, "msg": "Job expired."}), 410
+
+    if (meta.get("state") or "").lower() != "done":
+        return jsonify({"ok": False, "msg": "Job is not ready for download yet."}), 400
+
+    result_filename = meta.get("result_filename") or "result.pdf"
+    paths = pdf_jobs.build_job_paths(job_id)
+    target = (paths.output_dir / result_filename).resolve()
+    root = paths.output_dir.resolve()
+    if not str(target).startswith(str(root)) or not target.exists():
+        return jsonify({"ok": False, "msg": "Result file missing (job expired?)"}), 410
+
+    return send_file(target, as_attachment=True, download_name=result_filename, conditional=True)
 
 
 # ---- Entrypoint ---------------------------------------------------------
